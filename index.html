@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="サロン手帳">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#ffffff">
-<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="apple-touch-icon" href="icon-180.png?v=2">
 <link rel="manifest" href="manifest.json">
 <title>サロン手帳</title>
 <style>
@@ -179,10 +179,9 @@ dialog h3{margin:0 0 4px;font-size:20px}
   <div class="card"><h2>iPadとiPhoneをつなぐ（自動同期）</h2><div id="syncBody"></div></div>
   <div class="card"><h2>お店の名前</h2><input id="sShop" placeholder="サロン手帳"></div>
   <div class="card"><h2>メニューと料金（税込）</h2><div id="sMenus"></div><button class="btn" id="sAddMenu">＋ メニューを追加</button></div>
-  <div class="card"><h2>バックアップ</h2>
-    <p class="sub" style="margin:0 0 12px">データはこのiPadの中だけに保存されています（外部には送られません）。月に1回ほど「データを保存」→「"ファイル"に保存」→「このiPad内」に控えを残しておくと、アプリのデータが消えても元に戻せます。</p>
-    <div class="row"><button class="btn main" id="sExport">データを保存</button><button class="btn" id="sImport">保存データを読み込む</button><input type="file" id="sFile" accept=".json" hidden></div>
-    <p class="sub" id="sLast"></p>
+  <div class="card"><h2>アプリのバージョン</h2>
+    <p style="margin:0 0 12px">いまの版：<b id="sVer"></b>　<span class="sub" id="sVerMsg"></span></p>
+    <button class="btn main" id="sUpdate">アップデートを確認</button>
   </div>
 </section>
 </main>
@@ -427,26 +426,28 @@ $('#uToday').onclick=()=>{uDate=today();renderUriage()};
 function renderSettei(){
   $('#sShop').value=S.shop||'';
   $('#sMenus').innerHTML=S.menus.map((m,i)=>`<div class="mrow"><input value="${esc(m.name)}" data-i="${i}" data-f="name"><input type="number" inputmode="numeric" value="${m.price}" data-i="${i}" data-f="price"><button class="btn sm danger" data-rm="${i}">✕</button></div>`).join('');
-  $('#sLast').textContent=S.lastBackup?`前回の保存：${S.lastBackup}`:'まだ保存していません';
-  renderSync();
+  renderSync();renderVer();
 }
 $('#sShop').oninput=()=>{S.shop=$('#sShop').value.trim();save();header()};
 $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.menus[t.dataset.i];if(t.dataset.f==='price')m.price=+t.value||0;else m.name=t.value;save()};
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
-$('#sExport').onclick=async()=>{
-  const name=`salon-backup-${today()}.json`,blob=new Blob([JSON.stringify(S,null,1)],{type:'application/json'});
-  const file=new File([blob],name,{type:'application/json'});
-  try{
-    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name})} // iPad：共有シート→「"ファイル"に保存」
-    else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-  }catch(e){if(e.name==='AbortError')return;alert('保存できませんでした')}
-  S.lastBackup=today();save();renderSettei();toast('保存しました')};
-$('#sImport').onclick=()=>$('#sFile').click();
-$('#sFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;
-  try{const d=JSON.parse(await f.text());if(!d.menus||!d.sales)throw 0;
-    if(!confirm('今のデータを、このファイルの内容に置き換えます。よろしいですか？'))return;
-    S=d;save();header();renderSettei();toast('読み込みました')}catch(_){alert('このファイルは読み込めませんでした')}finally{e.target.value=''}};
+/* ---- アップデート ---- */
+const APP_VER='1.4'; // ←直したら version.json と一緒に上げる
+let latestVer=null;
+async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
+function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent=APP_VER;
+  $('#sVerMsg').textContent=latestVer&&latestVer!==APP_VER?`新しい版（${latestVer}）があります`:latestVer?'最新です':'';
+  $('#sUpdate').textContent=latestVer&&latestVer!==APP_VER?'アップデートする':'アップデートを確認'}
+$('#sUpdate').onclick=async()=>{
+  const v=await checkUpdate();
+  if(!v){alert('ネットにつながっていないため確認できません');return}
+  if(v===APP_VER){renderVer();toast('最新の版です');return}
+  toast('アップデートしています…');
+  try{const reg=navigator.serviceWorker&&await navigator.serviceWorker.getRegistration();if(reg)await reg.update();
+    if(window.caches)for(const k of await caches.keys())await caches.delete(k)}catch(e){}
+  location.reload(); // データは消えません（クラウドと端末に残る）
+};
 
 /* ---- 自動同期（Firebase 無料プラン） ---- */
 // 準備ができたら、Firebaseの設定をここに入れる。nullの間は同期なし（今まで通り端末内だけ）
@@ -526,8 +527,8 @@ header();renderYoyaku();initSync();
 // iPad：データを消されにくくする＋オフライン対応
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js');
-// 30日以上バックアップしていなければお知らせ
-if(S.sales.length&&(!S.lastBackup||(new Date(today())-new Date(S.lastBackup))/864e5>30))setTimeout(()=>toast('そろそろ「設定」からバックアップを'),1500);
+// 開いたときに新しい版があれば、設定タブに印を付ける
+checkUpdate().then(v=>{if(v&&v!==APP_VER){const b=$('nav button[data-t="settei"]');b.textContent='設定 ●';renderVer()}});
 </script>
 </body>
 </html>
