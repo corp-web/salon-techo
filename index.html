@@ -79,6 +79,11 @@ dialog h3{margin:0 0 4px;font-size:20px}
 #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:14px 22px;border-radius:999px;opacity:0;transition:.25s;pointer-events:none;font-size:16px}
 #toast.on{opacity:1;transform:translateX(-50%)}
 .mrow{display:flex;gap:8px;margin-bottom:8px}.mrow input:first-child{flex:2}.mrow input:nth-child(2){flex:1}
+.editbar{background:#fff4e0;border:1px solid #efd9b4;color:#7a5418;border-radius:12px;padding:12px 16px;margin-bottom:14px;font-weight:600}
+.pin::-webkit-inner-spin-button,.pin::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.pin{width:110px;text-align:right;padding:8px 10px;font-size:17px}
+.line .lp{display:flex;align-items:center;gap:4px}
+.line.chg .pin{border-color:var(--accent);background:var(--soft)}
 .tl{position:relative;cursor:pointer}
 .tl .hr{position:relative;border-top:1px solid var(--line);margin-left:58px}
 .tl .hr::after{content:'';position:absolute;left:0;right:0;top:50%;border-top:1px dashed #f1ebe4}
@@ -150,6 +155,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
 
 <!-- 会計 -->
 <section id="kaikei">
+  <div class="editbar" id="kEditBar" style="display:none"></div>
   <div class="card">
     <div class="row"><div style="flex:2"><label style="margin-top:0">お名前</label><input id="kName" list="names" placeholder="例：山田 花子"></div>
     <div style="flex:1"><label style="margin-top:0">日付</label><input id="kDate" type="date"></div></div>
@@ -170,6 +176,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
     <label>カルテメモ（今日の施術・薬剤・会話など）</label>
     <textarea id="kMemo" placeholder="例：6トーンのアッシュ。前髪短め希望。来月旅行"></textarea>
     <div class="row" style="margin-top:16px"><button class="btn" id="kClear">やり直す</button><button class="btn main big" id="kDone" style="flex:1">会計する</button></div>
+    <button class="btn danger" id="kVoid" style="width:100%;margin-top:10px;display:none">この会計を取り消す</button>
   </div>
 </section>
 
@@ -293,7 +300,7 @@ function renderYoyaku(){
   let h='';for(let m=from;m<to;m+=60)h+=`<div class="hr" style="height:${hh}px"><span>${m/60}:00</span></div>`;
   h+=`<div class="hr last"><span>${to/60}:00</span></div><div class="lane" style="height:${(to-from)*px}px">`;
   h+=items.map(({r,s,e,col,n})=>{const done=r.status==='done',sale=done&&S.sales.find(x=>x.id===r.saleId),ht=Math.max(30,(e-s)*px-3);
-    const short=ht<60,payB=done?`<span class="tag pay">済${n>1&&innerWidth<=520?'':' '+(sale?yen(sale.total):'')}</span>`:`<button class="btn main sm pay" data-pay="${r.id}">会計</button>`;
+    const short=ht<60,payB=done?`<span class="tag pay" data-sale="${r.saleId||''}" style="cursor:pointer">済${n>1&&innerWidth<=520?'':' '+(sale?yen(sale.total):'')}</span>`:`<button class="btn main sm pay" data-pay="${r.id}">会計</button>`;
     return `<div class="blk ${done?'done':''} ${short?'short':''}" data-id="${r.id}" style="top:${(s-from)*px+1}px;height:${ht}px;left:calc(${col/n*100}% + 2px);width:calc(${100/n}% - 4px)">${payB}`+
       (short?`<div class="nm"><span class="t">${toHM(s)}</span> ${esc(r.name)} 様</div>`
       :`<div class="t">${toHM(s)}〜${toHM(e)}</div><div class="nm">${esc(r.name)} 様</div><div class="t">${esc((r.menus||[]).join('・'))}${r.note?'　'+esc(r.note):''}</div>`)+`</div>`}).join('');
@@ -305,6 +312,7 @@ function renderYoyaku(){
 $('#yList').onclick=e=>{
   const p=e.target.closest('[data-pay]');
   if(p){startCheckout(S.reservations.find(r=>r.id===p.dataset.pay));return}
+  const sd=e.target.closest('[data-sale]');if(sd&&sd.dataset.sale){startEditSale(sd.dataset.sale);return}
   const b=e.target.closest('.blk');if(b){openRes(b.dataset.id);return}
   const lane=$('#yList .lane');if(!lane)return;
   const y=e.clientY-lane.getBoundingClientRect().top;if(y<0)return;
@@ -371,22 +379,32 @@ $('#mToday').onclick=()=>{calYM=today().slice(0,7);renderCal()};
 $('#cal').onclick=e=>{const d=e.target.closest('.day');if(!d)return;resDate=d.dataset.d;show('yoyaku')};
 
 /* ---- 会計 ---- */
-let co={resId:null,items:[],pay:'現金'};
-function resetCheckout(){co={resId:null,items:[],pay:'現金'};['#kName','#kDisc','#kMemo','#kRecv','#kOName','#kOPrice'].forEach(s=>$(s).value='');$('#kDate').value=today()}
+let co={resId:null,items:[],pay:'現金',editId:null};
+function resetCheckout(){co={resId:null,items:[],pay:'現金',editId:null};['#kName','#kDisc','#kMemo','#kRecv','#kOName','#kOPrice'].forEach(s=>$(s).value='');$('#kDate').value=today()}
 function startCheckout(r,name){
   resetCheckout();
-  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>{const m=S.menus.find(x=>x.name===n);co.items.push({name:n,price:m?m.price:0})});$('#kName').value=r.name;$('#kDate').value=r.date}
+  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>{const m=S.menus.find(x=>x.name===n);co.items.push({name:n,price:m?m.price:0,base:m?m.price:0})});$('#kName').value=r.name;$('#kDate').value=r.date}
   else if(name)$('#kName').value=name;
   show('kaikei');
 }
+// 済んだ会計を開いて、変更・取り消しする
+function startEditSale(id){const s=S.sales.find(x=>x.id===id);if(!s)return;
+  resetCheckout();co.editId=id;co.items=s.items.map(i=>({...i}));co.pay=s.pay;
+  $('#kName').value=s.name==='お客様'&&!s.customerId?'':s.name;$('#kDate').value=s.date;$('#kDisc').value=s.discount||'';$('#kMemo').value=s.memo||'';
+  show('kaikei')}
+function voidSale(s){S.sales=S.sales.filter(v=>v!==s);S.reservations.forEach(r=>{if(r.saleId===s.id){r.status='yoyaku';delete r.saleId}});save()}
 function subtotal(){return co.items.reduce((a,b)=>a+b.price,0)}
 function total(){return Math.max(0,subtotal()-(+$('#kDisc').value||0))}
 function calc(){const t=total();$('#kTotal').textContent=yen(t);const r=+$('#kRecv').value||0;$('#kChange').textContent=r?(r>=t?yen(r-t):'不足'):'—'}
 function renderKaikei(){
   fillNames();if(!$('#kDate').value)$('#kDate').value=today();
   $('#kMenus').innerHTML=S.menus.map((m,i)=>`<button type="button" class="mbtn" data-i="${i}"><b>${esc(m.name)}</b><span>${yen(m.price)}</span></button>`).join('');
-  $('#kItems').innerHTML=co.items.length?co.items.map((it,i)=>`<div class="line"><span>${esc(it.name)}</span><span>${yen(it.price)}<button class="x" data-x="${i}" aria-label="削除">✕</button></span></div>`).join(''):'<p class="empty">メニューを押してください</p>';
+  $('#kItems').innerHTML=co.items.length?co.items.map((it,i)=>`<div class="line ${it.base!=null&&it.base!==it.price?'chg':''}"><span>${esc(it.name)}${it.base!=null&&it.base!==it.price?`<span class="sub">（通常 ${yen(it.base)}）</span>`:''}</span><span class="lp">¥<input class="pin" type="number" inputmode="numeric" value="${it.price}" data-p="${i}" aria-label="金額"><button class="x" data-x="${i}" aria-label="削除">✕</button></span></div>`).join(''):'<p class="empty">メニューを押してください</p>';
   $$('#kPay button').forEach(b=>b.classList.toggle('on',b.dataset.p===co.pay));
+  const ed=co.editId&&S.sales.find(x=>x.id===co.editId);
+  if(co.editId&&!ed)resetCheckout(); // 他の端末で取り消された
+  $('#kEditBar').style.display=ed?'':'none';if(ed)$('#kEditBar').textContent=`${jp(ed.date)} ${ed.time} の会計を変更しています`;
+  $('#kDone').textContent=ed?'変更を保存':'会計する';$('#kClear').textContent=ed?'やめる':'やり直す';$('#kVoid').style.display=ed?'':'none';
   $('#recvRow').style.display=co.pay==='現金'?'':'none';
   calc();custHint();
 }
@@ -396,18 +414,30 @@ function custHint(){
   const last=S.sales.filter(s=>s.customerId===c.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time))[0];
   el.innerHTML=(c.memo?`<div>メモ：${esc(c.memo)}</div>`:'')+(last?`<div class="sub">前回 ${jp(last.date)}：${esc(last.items.map(i=>i.name).join('・'))}${last.memo?'／'+esc(last.memo):''}</div>`:'<div class="sub">来店履歴はまだありません</div>');
 }
-$('#kMenus').onclick=e=>{const b=e.target.closest('.mbtn');if(!b)return;const m=S.menus[b.dataset.i];co.items.push({name:m.name,price:m.price});renderKaikei()};
+$('#kMenus').onclick=e=>{const b=e.target.closest('.mbtn');if(!b)return;const m=S.menus[b.dataset.i];co.items.push({name:m.name,price:m.price,base:m.price});renderKaikei()};
+$('#kItems').oninput=e=>{const i=e.target.dataset.p;if(i==null)return;co.items[i].price=Math.max(0,+e.target.value||0);calc()};
+$('#kItems').addEventListener('change',e=>{if(e.target.dataset.p!=null)renderKaikei()}); // 入力を終えたら「通常◯円」を表示
+$('#kItems').addEventListener('focusin',e=>{if(e.target.dataset.p!=null)e.target.select()});
 $('#kItems').onclick=e=>{const x=e.target.closest('[data-x]');if(!x)return;co.items.splice(+x.dataset.x,1);renderKaikei()};
 $('#kOAdd').onclick=()=>{const n=$('#kOName').value.trim()||'その他',p=+$('#kOPrice').value||0;if(!p){alert('金額を入れてください');return}
   co.items.push({name:n,price:p});$('#kOName').value='';$('#kOPrice').value='';renderKaikei()};
 $('#kPay').onclick=e=>{const b=e.target.closest('button');if(!b)return;co.pay=b.dataset.p;renderKaikei()};
 $('#kDisc').oninput=calc;$('#kRecv').oninput=calc;$('#kName').oninput=custHint;
-$('#kClear').onclick=()=>{if(co.items.length&&!confirm('入力を消してやり直しますか？'))return;resetCheckout();renderKaikei()};
+$('#kClear').onclick=()=>{
+  if(co.editId){const d=$('#kDate').value;resetCheckout();renderKaikei();uDate=d||uDate;show('uriage');return}
+  if(co.items.length&&!confirm('入力を消してやり直しますか？'))return;resetCheckout();renderKaikei()};
+$('#kVoid').onclick=()=>{const s=S.sales.find(x=>x.id===co.editId);if(!s)return;
+  if(!confirm(`${s.name} 様の会計 ${yen(s.total)} を取り消しますか？\n（売上から消え、予約は「会計前」に戻ります）`))return;
+  voidSale(s);const d=s.date;resetCheckout();renderKaikei();uDate=d;show('uriage');toast('会計を取り消しました')};
 $('#kDone').onclick=()=>{
   if(!co.items.length){alert('メニューを選んでください');return}
   const t=total();if(co.pay==='現金'){const r=+$('#kRecv').value||0;if(r&&r<t){alert('お預かりが足りません');return}}
   const name=$('#kName').value.trim(),c=ensureCust(name);
-  const sale={id:uid(),date:$('#kDate').value||today(),time:hm(),customerId:c?c.id:null,name:name||'お客様',items:co.items,discount:+$('#kDisc').value||0,total:t,pay:co.pay,memo:$('#kMemo').value.trim()};
+  const items=co.items.map(({name,price})=>({name,price})); // 「通常価格」は保存しない
+  if(co.editId){const s=S.sales.find(x=>x.id===co.editId);if(!s){alert('この会計は取り消されています');resetCheckout();renderKaikei();return}
+    Object.assign(s,{date:$('#kDate').value||s.date,customerId:c?c.id:null,name:name||'お客様',items,discount:+$('#kDisc').value||0,total:t,pay:co.pay,memo:$('#kMemo').value.trim()});
+    save();toast(`会計を変更しました　${yen(t)}`);uDate=s.date;resetCheckout();renderKaikei();show('uriage');return}
+  const sale={id:uid(),date:$('#kDate').value||today(),time:hm(),customerId:c?c.id:null,name:name||'お客様',items,discount:+$('#kDisc').value||0,total:t,pay:co.pay,memo:$('#kMemo').value.trim()};
   S.sales.push(sale);
   const r=co.resId&&S.reservations.find(x=>x.id===co.resId);if(r){r.status='done';r.saleId=sale.id}
   save();toast(`会計しました　${yen(t)}`);
@@ -464,17 +494,15 @@ function renderUriage(){
   const by=['現金','カード','QR'].map(p=>[p,sumOf(day.filter(s=>s.pay===p))]).filter(x=>x[1]);
   $('#uDaySub').textContent=`${day.length}名`+(by.length?'　'+by.map(([p,v])=>`${p} ${yen(v)}`).join('・'):'');
   $('#uMonLbl').textContent=`${+ym.slice(5)}月の売上`;$('#uMon').textContent=yen(sumOf(mon));$('#uMonSub').textContent=`${mon.length}名`;
-  $('#uList').innerHTML=day.length?day.map(s=>`<div class="item" style="cursor:default"><div class="time" style="font-size:15px">${s.time}</div><div class="body"><div class="name" style="font-size:16px">${esc(s.name)} 様</div>
-    <div class="sub">${esc(s.items.map(i=>i.name).join('・'))}${s.discount?`（値引 ${yen(s.discount)}）`:''}・${s.pay}</div></div><b>${yen(s.total)}</b><button class="x" data-del="${s.id}" title="取消">✕</button></div>`).join('')
+  $('#uList').innerHTML=day.length?day.map(s=>`<div class="item" data-sale="${s.id}"><div class="time" style="font-size:15px">${s.time}</div><div class="body"><div class="name" style="font-size:16px">${esc(s.name)} 様</div>
+    <div class="sub">${esc(s.items.map(i=>i.name).join('・'))}${s.discount?`（値引 ${yen(s.discount)}）`:''}・${s.pay}</div></div><b>${yen(s.total)}</b><span class="sub" style="margin-left:4px">›</span></div>`).join('')+'<p class="sub" style="margin:10px 4px 0">会計を押すと、変更・取り消しができます</p>'
     :'<p class="empty">この日の会計はありません</p>';
   const days={};mon.forEach(s=>{(days[s.date]=days[s.date]||[]).push(s)});
   $('#uDailyLbl').textContent=`${+ym.slice(5)}月の日別`;
   const keys=Object.keys(days).sort();
   $('#uDaily').innerHTML=keys.length?keys.map(k=>`<tr><td>${jp(k)}</td><td>${days[k].length}名</td><td>${yen(sumOf(days[k]))}</td></tr>`).join(''):'<tr><td class="sub">記録なし</td></tr>';
 }
-$('#uList').onclick=e=>{const x=e.target.closest('[data-del]');if(!x)return;const s=S.sales.find(v=>v.id===x.dataset.del);
-  if(!confirm(`${s.name} 様の会計 ${yen(s.total)} を取り消しますか？`))return;
-  S.sales=S.sales.filter(v=>v!==s);S.reservations.forEach(r=>{if(r.saleId===s.id){r.status='yoyaku';delete r.saleId}});save();renderUriage();toast('会計を取り消しました')};
+$('#uList').onclick=e=>{const x=e.target.closest('[data-sale]');if(x)startEditSale(x.dataset.sale)};
 $('#uPrev').onclick=()=>{uDate=addDay(uDate,-1);renderUriage()};
 $('#uNext').onclick=()=>{uDate=addDay(uDate,1);renderUriage()};
 $('#uToday').onclick=()=>{uDate=today();renderUriage()};
@@ -493,7 +521,7 @@ $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='1.6'; // ←直したら version.json と一緒に上げる
+const APP_VER='1.7'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
