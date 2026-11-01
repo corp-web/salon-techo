@@ -197,7 +197,12 @@ dialog h3{margin:0 0 4px;font-size:20px}
     <div class="stat"><div class="k">この日の売上</div><div class="v" id="uDay">¥0</div><div class="sub" id="uDaySub"></div></div>
     <div class="stat"><div class="k" id="uMonLbl">今月の売上</div><div class="v" id="uMon">¥0</div><div class="sub" id="uMonSub"></div></div>
   </div>
-  <div class="card" style="margin-top:14px"><h2>この日の会計</h2><div id="uList"></div></div>
+  <div class="card" style="margin-top:14px"><h2 id="uFcLbl">売上の見込み</h2>
+    <div id="uFc"></div>
+    <table id="uFcTbl" style="margin-top:12px"></table>
+    <p class="sub" style="margin:10px 4px 0">見込み＝会計済みの売上＋これからの予約（予約のメニューの料金で計算）。メニューを選んでいない予約は ¥0 で数えます。</p>
+  </div>
+  <div class="card"><h2>この日の会計</h2><div id="uList"></div></div>
   <div class="card"><h2 id="uDailyLbl">日別</h2><table id="uDaily"></table></div>
 </section>
 
@@ -553,6 +558,18 @@ $('#cToPay').onclick=()=>{if(!saveCust())return;$('#dlgCust').close();startCheck
 
 /* ---- 売上 ---- */
 let uDate=today();
+const addMon=(ym,k)=>{let [y,m]=ym.split('-').map(Number);m+=k;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return `${y}-${String(m).padStart(2,'0')}`};
+const resEst=r=>(r.menus||[]).reduce((a,n)=>{const m=S.menus.find(x=>x.name===n);return a+(m?+m.price||0:0)},0);
+const pendingRes=pre=>S.reservations.filter(r=>r.status!=='done'&&r.date&&r.date.startsWith(pre)&&r.date>=today());
+function forecast(ym){const mon=S.sales.filter(s=>s.date.startsWith(ym)),rs=pendingRes(ym),est=rs.reduce((a,r)=>a+resEst(r),0);
+  return{sold:sumOf(mon),ns:mon.length,est,nr:rs.length,nm:rs.filter(r=>!(r.menus||[]).length).length,total:sumOf(mon)+est}}
+function renderForecast(ym){const f=forecast(ym),M=+ym.slice(5);
+  $('#uFcLbl').textContent=`${M}月の売上の見込み`;
+  const row=(k,v,sub,big)=>`<div style="display:flex;align-items:baseline;gap:10px;padding:8px 4px;${big?'border-top:2px solid var(--line);margin-top:4px':'border-bottom:1px solid var(--line)'}"><div style="flex:1;${big?'font-weight:600':''}">${k}${sub?`<span class="sub" style="margin-left:8px">${sub}</span>`:''}</div><div style="font-size:${big?'26px':'18px'};font-weight:600">${v}</div></div>`;
+  $('#uFc').innerHTML=row('会計済み',yen(f.sold),`${f.ns}名`)+row('これからの予約',yen(f.est),`${f.nr}件${f.nm?`（うちメニュー未定 ${f.nm}件）`:''}`)+row('見込み合計',yen(f.total),'',1);
+  const base=today().slice(0,7);
+  $('#uFcTbl').innerHTML='<tr><td class="sub">月</td><td class="sub">会計済み</td><td class="sub">予約</td><td class="sub">見込み</td></tr>'+[0,1,2].map(i=>{const m=addMon(base,i),g=forecast(m);
+    return `<tr><td>${+m.slice(5)}月${i===0?'（今月）':''}</td><td>${yen(g.sold)}</td><td>${yen(g.est)} <span class="sub">${g.nr}件</span></td><td><b>${yen(g.total)}</b></td></tr>`}).join('')}
 function renderUriage(){
   $('#uDate').textContent=jp(uDate)+(uDate===today()?'・今日':'');
   const day=S.sales.filter(s=>s.date===uDate).sort((a,b)=>a.time.localeCompare(b.time));
@@ -561,13 +578,16 @@ function renderUriage(){
   const by=['現金','カード','QR'].map(p=>[p,sumOf(day.filter(s=>s.pay===p))]).filter(x=>x[1]);
   $('#uDaySub').textContent=`${day.length}名`+(by.length?'　'+by.map(([p,v])=>`${p} ${yen(v)}`).join('・'):'');
   $('#uMonLbl').textContent=`${+ym.slice(5)}月の売上`;$('#uMon').textContent=yen(sumOf(mon));$('#uMonSub').textContent=`${mon.length}名`;
+  renderForecast(ym);
   $('#uList').innerHTML=day.length?day.map(s=>`<div class="item" data-sale="${s.id}"><div class="time" style="font-size:15px">${s.time}</div><div class="body"><div class="name" style="font-size:16px">${esc(s.name)} 様</div>
     <div class="sub">${esc(s.items.map(i=>i.name).join('・'))}${s.discount?`（値引 ${yen(s.discount)}）`:''}・${s.pay}</div></div><b>${yen(s.total)}</b><span class="sub" style="margin-left:4px">›</span></div>`).join('')+'<p class="sub" style="margin:10px 4px 0">会計を押すと、変更・取り消しができます</p>'
     :'<p class="empty">この日の会計はありません</p>';
   const days={};mon.forEach(s=>{(days[s.date]=days[s.date]||[]).push(s)});
   $('#uDailyLbl').textContent=`${+ym.slice(5)}月の日別`;
-  const keys=Object.keys(days).sort();
-  $('#uDaily').innerHTML=keys.length?keys.map(k=>`<tr><td>${jp(k)}</td><td>${days[k].length}名</td><td>${yen(sumOf(days[k]))}</td></tr>`).join(''):'<tr><td class="sub">記録なし</td></tr>';
+  const fut={};pendingRes(ym).forEach(r=>{(fut[r.date]=fut[r.date]||[]).push(r)});
+  const keys=[...new Set([...Object.keys(days),...Object.keys(fut)])].sort();
+  $('#uDaily').innerHTML=keys.length?keys.map(k=>{const sd=days[k]||[],fr=fut[k]||[],e=fr.reduce((a,r)=>a+resEst(r),0);
+    return `<tr><td>${jp(k)}</td><td>${sd.length?sd.length+'名':''}${fr.length?`${sd.length?'＋':''}<span class="sub">予約${fr.length}件</span>`:''}</td><td>${sd.length?yen(sumOf(sd)):''}${fr.length?`${sd.length?'＋':''}<span class="sub">見込み${yen(e)}</span>`:''}</td></tr>`}).join(''):'<tr><td class="sub">記録なし</td></tr>';
 }
 $('#uList').onclick=e=>{const x=e.target.closest('[data-sale]');if(x)startEditSale(x.dataset.sale)};
 $('#uPrev').onclick=()=>{uDate=addDay(uDate,-1);renderUriage()};
@@ -590,7 +610,7 @@ $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='1.8'; // ←直したら version.json と一緒に上げる
+const APP_VER='1.9'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
@@ -618,11 +638,15 @@ function localDocs(){const m={};COLS.forEach(c=>S[c].forEach(x=>m[c+'/'+x.id]=x)
 function schedulePush(){if(!FB.ready)return;clearTimeout(FB.t);FB.t=setTimeout(push,400)}
 async function push(){
   if(!FB.ready)return;const {doc,writeBatch}=FB.fs,cur=localDocs(),ops=[];
-  for(const k in cur){const s=canon(cur[k]);if(FB.shadow[k]!==s){ops.push(['set',k,JSON.parse(JSON.stringify(cur[k]))]);FB.shadow[k]=s}}
+  for(const k in cur){const s=canon(cur[k]);if(FB.shadow[k]!==s){let d=JSON.parse(JSON.stringify(cur[k])),t='set';
+    // 設定は変えた項目だけ送る（2台で別々の項目を同時に変えても、両方残る）
+    if(k==='meta/settings'&&FB.shadow[k]!==undefined){let sh={};try{sh=JSON.parse(FB.shadow[k])}catch(e){}
+      const p={};Object.keys(d).forEach(f=>{if(canon(d[f])!==canon(sh[f]))p[f]=d[f]===undefined?null:d[f]});d=p;t='merge'}
+    ops.push([t,k,d]);FB.shadow[k]=s}}
   for(const k in FB.shadow)if(!(k in cur)){ops.push(['del',k]);delete FB.shadow[k]}
   if(ops.length)saveShadow();
   for(let i=0;i<ops.length;i+=400){const b=writeBatch(FB.db);
-    ops.slice(i,i+400).forEach(([t,k,d])=>{const r=doc(FB.db,'users',FB.user.uid,...k.split('/'));t==='set'?b.set(r,d):b.delete(r)});
+    ops.slice(i,i+400).forEach(([t,k,d])=>{const r=doc(FB.db,'users',FB.user.uid,...k.split('/'));t==='set'?b.set(r,d):t==='merge'?b.set(r,d,{merge:true}):b.delete(r)});
     try{await b.commit()}catch(e){console.error(e);toast('同期できませんでした（あとで自動で再開します）')}}
 }
 // 「最後にクラウドと一致した内容(shadow)」を端末にも保存。これと違う＝まだ送っていない変更なので、クラウドの古い内容で上書きしない
@@ -633,7 +657,15 @@ const isDirty=(k,local)=>FB.shadow[k]!==undefined&&canon(local)!==FB.shadow[k];
 function applyRemote(c,snap){
   if(snap.metadata.fromCache&&snap.empty)return; // 端末の控えが空のときは上書きしない
   if(c==='meta'){const d=snap.docs.find(x=>x.id==='settings'),k='meta/settings';
-    if(d&&!isDirty(k,localDocs()[k])){const v=d.data();S.shop=v.shop||'';S.menus=v.menus||[];if(v.hours)S.hours=v.hours;if(v.receipt)S.receipt=v.receipt;FB.shadow[k]=canon({id:'settings',shop:S.shop,menus:S.menus,hours:v.hours||null,receipt:v.receipt||null})}}
+    if(d){const v=d.data(),L=localDocs()[k],R={id:'settings',shop:v.shop||'',menus:v.menus||[],hours:v.hours||null,receipt:v.receipt||null};
+      let sh=null;try{sh=FB.shadow[k]!==undefined?JSON.parse(FB.shadow[k]):null}catch(e){}
+      // 項目ごとに判断：この端末で変えたばかりの項目だけ端末を優先、それ以外はクラウドの内容を入れる
+      const mine=f=>sh&&(f in sh)&&canon(L[f])!==canon(sh[f]);
+      if(!mine('shop'))S.shop=R.shop;
+      if(!mine('menus'))S.menus=R.menus;
+      if(!mine('hours')&&R.hours)S.hours=R.hours;
+      if(!mine('receipt')&&R.receipt)S.receipt=R.receipt;
+      FB.shadow[k]=canon(R)}}
   else{
     const byId=new Map(S[c].map(x=>[x.id,x])),next=[],seen=new Set();
     snap.docs.forEach(d=>{const k=c+'/'+d.id,o=byId.get(d.id),v=d.data();seen.add(d.id);
@@ -694,8 +726,18 @@ header();renderYoyaku();initSync();
 // iPad：データを消されにくくする＋オフライン対応
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js');
-// 開いたときに新しい版があれば、設定タブに印を付ける
-checkUpdate().then(v=>{if(v&&v!==APP_VER){const b=$('nav button[data-t="settei"]');b.textContent='設定 ●';renderVer()}});
+// 開いたとき・画面に戻ったときに新しい版があれば、作業中でなければ自動で入れる（データ・ログインはそのまま）
+async function autoUpdate(){const v=await checkUpdate();if(!v||v===APP_VER)return;
+  const b=$('nav button[data-t="settei"]');b.textContent='設定 ●';renderVer();
+  const busy=document.querySelector('dialog[open]')||(document.activeElement&&document.activeElement.matches('input,textarea,select'))||co.items.length||co.editId;
+  let tried=null;try{tried=JSON.parse(localStorage.getItem(KEY+'-upd'))}catch(e){}
+  if(busy||(tried&&tried.v===v&&Date.now()-tried.t<15*60*1000))return; // 何度も読み込み直さないように
+  try{localStorage.setItem(KEY+'-upd',JSON.stringify({v,t:Date.now()}))}catch(e){}
+  try{const reg=navigator.serviceWorker&&await navigator.serviceWorker.getRegistration();if(reg)await reg.update();
+    if(window.caches)for(const k of await caches.keys())await caches.delete(k)}catch(e){}
+  location.reload()}
+autoUpdate();
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')autoUpdate()});
 </script>
 </body>
 </html>
