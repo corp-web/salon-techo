@@ -230,14 +230,16 @@ const sumOf=a=>a.reduce((x,s)=>x+s.total,0);
 function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.menus)return d}catch(e){}
   return{shop:'',menus:DEFAULT_MENUS.map(m=>({...m})),customers:[],reservations:[],sales:[],lastBackup:''}}
 function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('保存できませんでした。バックアップを取ってください。')}}
-function save(){saveLocal();schedulePush()}
+function save(){if(S.syncUid&&!FB.ready)S.offEdits=true;saveLocal();schedulePush()} // 同期が切れている間の入力は、再ログイン時に消さずに合流させる
 let S=load();
 
 function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove('on'),1800)}
 function custByName(n){return S.customers.find(c=>c.name===n)}
 function ensureCust(n){n=(n||'').trim();if(!n)return null;let c=custByName(n);if(!c){c={id:uid(),name:n,tel:'',birth:'',memo:''};S.customers.push(c)}return c}
 function fillNames(){$('#names').innerHTML=S.customers.map(c=>`<option value="${esc(c.name)}">`).join('')}
-function header(){$('#shopName').textContent=S.shop||'サロン手帳';$('#hdrDate').textContent=jp(today())+(FB.user?'　● 同期中':'')}
+function header(){$('#shopName').textContent=S.shop||'サロン手帳';const h=$('#hdrDate');
+  const cut=FB.authChecked&&!FB.user&&S.syncUid; // 以前つないでいたのに、今はログインが切れている
+  h.innerHTML=esc(jp(today()))+(FB.user?'　<span style="color:var(--ok)">● 同期中</span>':cut?'　<span style="color:var(--warn);cursor:pointer" onclick="show(\'settei\')">⚠ 同期が切れています（押して再ログイン）</span>':'')}
 
 /* ---- タブ ---- */
 const render={yoyaku:renderYoyaku,calendar:renderCal,kaikei:renderKaikei,okyaku:renderOkyaku,uriage:renderUriage,settei:renderSettei};
@@ -478,26 +480,30 @@ function applyRemote(c,snap){
     S[c]=next;
   }
   FB.first[c]=true;
-  if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;S.syncUid=FB.user.uid;saveLocal();push();if(FB.merge)toast('このiPadのデータをクラウドに移しました')}
+  if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;const was=S.syncUid;S.syncUid=FB.user.uid;delete S.offEdits;saveLocal();push();if(FB.merge)toast(was?'同期を再開しました':'この端末のデータをクラウドに移しました')}
   saveLocal();header();
   const a=document.activeElement;if(!(a&&a.matches('main input,main textarea')))render[$('nav button.on').dataset.t]();
 }
 async function startSync(user){
   const {collection,onSnapshot}=FB.fs;
-  FB.user=user;FB.ready=false;FB.first={};FB.shadow={};FB.merge=S.syncUid!==user.uid;header();
+  FB.user=user;FB.ready=false;FB.first={};FB.shadow={};FB.merge=S.syncUid!==user.uid||!!S.offEdits;header();
   FB.unsub=[...COLS,'meta'].map(c=>onSnapshot(collection(FB.db,'users',user.uid,c),{includeMetadataChanges:true},s=>applyRemote(c,s),e=>console.error(e)));
 }
 function stopSync(){(FB.unsub||[]).forEach(f=>f());FB.unsub=[];FB.user=null;FB.ready=false;header()}
 function renderSync(){
   const el=$('#syncBody');if(!el)return;
   if(!FIREBASE_CONFIG){el.innerHTML='<p class="sub" style="margin:0">準備中です。今はデータはこの端末の中だけに保存されています。</p>';return}
-  if(FB.user){el.innerHTML=`<p style="margin:0 0 12px">● 同期中：${esc(FB.user.email)}</p><p class="sub" style="margin:0 0 12px">同じメールでログインした iPad・iPhone に自動で反映されます。電波がない間の入力も、つながったときに送られます。</p><button class="btn" id="syncOut">ログアウト</button>`;
+  if(FB.user){el.innerHTML=`<p style="margin:0 0 12px">● 同期中：${esc(FB.user.email)}</p><p class="sub" style="margin:0 0 12px">パスワードを変えたいときは、一度ログアウトして「パスワードを忘れた／変えたい」から。変えてもデータは消えません。</p><p class="sub" style="margin:0 0 12px">同じメールでログインした iPad・iPhone に自動で反映されます。電波がない間の入力も、つながったときに送られます。</p><button class="btn" id="syncOut">ログアウト</button>`;
     $('#syncOut').onclick=async()=>{if(!confirm('ログアウトすると、この端末は同期しなくなります。よろしいですか？'))return;stopSync();await FB.auth.signOut(FB.authObj);renderSync()};return}
   el.innerHTML=`<p class="sub" style="margin:0 0 4px">お店用のメールとパスワードでログインすると、iPadとiPhoneが自動でつながります。</p>
     <label>メールアドレス</label><input id="syncMail" type="email" autocomplete="username">
     <label>パスワード</label><input id="syncPass" type="password" autocomplete="current-password">
     <div class="row" style="margin-top:14px"><button class="btn main" id="syncIn" style="flex:1">ログイン</button><button class="btn" id="syncNew">はじめて使う（登録）</button></div>
-    <p class="sub">「はじめて使う」は最初の1台だけ。2台目からは「ログイン」を押します。</p>`;
+    <p class="sub">「はじめて使う」は最初の1台だけ。2台目からは「ログイン」を押します。</p>
+    <p style="margin:6px 0 0"><a href="#" id="syncForgot" style="color:var(--accent);font-size:15px">パスワードを忘れた／変えたい</a></p>`;
+  $('#syncForgot').onclick=async e=>{e.preventDefault();const m=$('#syncMail').value.trim();if(!m){alert('先にメールアドレスを入れてください');return}
+    try{await FB.auth.sendPasswordResetEmail(FB.authObj,m);alert(`${m} にパスワード変更のメールを送りました。メールのリンクから新しいパスワードを決めてください。データは消えません。`)}
+    catch(e){alert('送れませんでした。メールアドレスを確かめてください')}};
   const go=async(fn,ok)=>{const m=$('#syncMail').value.trim(),p=$('#syncPass').value;if(!m||!p){alert('メールアドレスとパスワードを入れてください');return}
     try{await fn(FB.authObj,m,p);toast(ok)}
     catch(e){const c=e.code||'';alert(/email-already-in-use/.test(c)?'このメールは登録済みです。「ログイン」を押してください':/weak-password/.test(c)?'パスワードは6文字以上にしてください':/invalid-email/.test(c)?'メールアドレスの形が正しくありません':/invalid|wrong|not-found|credential/.test(c)?'メールアドレスかパスワードが違います':/network/.test(c)?'ネットにつながっていません':'うまくいきませんでした（'+c+'）')}};
@@ -512,7 +518,7 @@ async function initSync(){
     FB.fs=fs;FB.auth=auth;
     FB.db=fs.initializeFirestore(app,{localCache:fs.persistentLocalCache({tabManager:fs.persistentSingleTabManager()})});
     FB.authObj=auth.initializeAuth(app,{persistence:[auth.indexedDBLocalPersistence,auth.browserLocalPersistence]});
-    auth.onAuthStateChanged(FB.authObj,u=>{if(u&&(!FB.user||FB.user.uid!==u.uid))startSync(u);else if(!u&&FB.user)stopSync();renderSync()});
+    auth.onAuthStateChanged(FB.authObj,u=>{FB.authChecked=true;if(u&&(!FB.user||FB.user.uid!==u.uid))startSync(u);else if(!u&&FB.user)stopSync();header();renderSync()});
   }catch(e){console.error(e)}
 }
 
