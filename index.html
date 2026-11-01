@@ -176,6 +176,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
 
 <!-- 設定 -->
 <section id="settei">
+  <div class="card"><h2>iPadとiPhoneをつなぐ（自動同期）</h2><div id="syncBody"></div></div>
   <div class="card"><h2>お店の名前</h2><input id="sShop" placeholder="サロン手帳"></div>
   <div class="card"><h2>メニューと料金（税込）</h2><div id="sMenus"></div><button class="btn" id="sAddMenu">＋ メニューを追加</button></div>
   <div class="card"><h2>バックアップ</h2>
@@ -228,14 +229,15 @@ const sumOf=a=>a.reduce((x,s)=>x+s.total,0);
 
 function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.menus)return d}catch(e){}
   return{shop:'',menus:DEFAULT_MENUS.map(m=>({...m})),customers:[],reservations:[],sales:[],lastBackup:''}}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('保存できませんでした。バックアップを取ってください。')}}
+function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('保存できませんでした。バックアップを取ってください。')}}
+function save(){saveLocal();schedulePush()}
 let S=load();
 
 function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove('on'),1800)}
 function custByName(n){return S.customers.find(c=>c.name===n)}
 function ensureCust(n){n=(n||'').trim();if(!n)return null;let c=custByName(n);if(!c){c={id:uid(),name:n,tel:'',birth:'',memo:''};S.customers.push(c)}return c}
 function fillNames(){$('#names').innerHTML=S.customers.map(c=>`<option value="${esc(c.name)}">`).join('')}
-function header(){$('#shopName').textContent=S.shop||'サロン手帳';$('#hdrDate').textContent=jp(today())}
+function header(){$('#shopName').textContent=S.shop||'サロン手帳';$('#hdrDate').textContent=jp(today())+(FB.user?'　● 同期中':'')}
 
 /* ---- タブ ---- */
 const render={yoyaku:renderYoyaku,calendar:renderCal,kaikei:renderKaikei,okyaku:renderOkyaku,uriage:renderUriage,settei:renderSettei};
@@ -424,6 +426,7 @@ function renderSettei(){
   $('#sShop').value=S.shop||'';
   $('#sMenus').innerHTML=S.menus.map((m,i)=>`<div class="mrow"><input value="${esc(m.name)}" data-i="${i}" data-f="name"><input type="number" inputmode="numeric" value="${m.price}" data-i="${i}" data-f="price"><button class="btn sm danger" data-rm="${i}">✕</button></div>`).join('');
   $('#sLast').textContent=S.lastBackup?`前回の保存：${S.lastBackup}`:'まだ保存していません';
+  renderSync();
 }
 $('#sShop').oninput=()=>{S.shop=$('#sShop').value.trim();save();header()};
 $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.menus[t.dataset.i];if(t.dataset.f==='price')m.price=+t.value||0;else m.name=t.value;save()};
@@ -443,7 +446,77 @@ $('#sFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;
     if(!confirm('今のデータを、このファイルの内容に置き換えます。よろしいですか？'))return;
     S=d;save();header();renderSettei();toast('読み込みました')}catch(_){alert('このファイルは読み込めませんでした')}finally{e.target.value=''}};
 
-header();renderYoyaku();
+/* ---- 自動同期（Firebase 無料プラン） ---- */
+// 準備ができたら、Firebaseの設定をここに入れる。nullの間は同期なし（今まで通り端末内だけ）
+// ※この設定は「どのFirebaseにつなぐか」を示す公開用の識別子で、秘密の鍵ではありません（データの保護はログイン＋セキュリティルールで行う）
+const FIREBASE_CONFIG={apiKey:'AIzaSyDGyfdjRb055c3ICmpPLSBL8OpCG2h4UjQ',authDomain:'salon-techo.firebaseapp.com',projectId:'salon-techo',storageBucket:'salon-techo.firebasestorage.app',messagingSenderId:'623463517972',appId:'1:623463517972:web:5e6b3b8712b67c9e17bc01'};
+const SDK='https://www.gstatic.com/firebasejs/10.12.2/';
+const COLS=['customers','reservations','sales'];
+const FB={user:null,ready:false,shadow:{},first:{},merge:false};
+const canon=v=>Array.isArray(v)?'['+v.map(canon).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}':JSON.stringify(v===undefined?null:v);
+function localDocs(){const m={};COLS.forEach(c=>S[c].forEach(x=>m[c+'/'+x.id]=x));m['meta/settings']={id:'settings',shop:S.shop||'',menus:S.menus};return m}
+function schedulePush(){if(!FB.ready)return;clearTimeout(FB.t);FB.t=setTimeout(push,400)}
+async function push(){
+  if(!FB.ready)return;const {doc,writeBatch}=FB.fs,cur=localDocs(),ops=[];
+  for(const k in cur){const s=canon(cur[k]);if(FB.shadow[k]!==s){ops.push(['set',k,JSON.parse(JSON.stringify(cur[k]))]);FB.shadow[k]=s}}
+  for(const k in FB.shadow)if(!(k in cur)){ops.push(['del',k]);delete FB.shadow[k]}
+  for(let i=0;i<ops.length;i+=400){const b=writeBatch(FB.db);
+    ops.slice(i,i+400).forEach(([t,k,d])=>{const r=doc(FB.db,'users',FB.user.uid,...k.split('/'));t==='set'?b.set(r,d):b.delete(r)});
+    try{await b.commit()}catch(e){console.error(e);toast('同期できませんでした（あとで自動で再開します）')}}
+}
+function applyRemote(c,snap){
+  if(snap.metadata.fromCache&&snap.empty)return; // 端末の控えが空のときは上書きしない
+  if(c==='meta'){const d=snap.docs.find(x=>x.id==='settings');
+    if(d){const v=d.data();S.shop=v.shop||'';S.menus=v.menus||[];FB.shadow['meta/settings']=canon({id:'settings',shop:S.shop,menus:S.menus})}}
+  else{
+    const byId=new Map(S[c].map(x=>[x.id,x])),next=[],seen=new Set();
+    snap.docs.forEach(d=>{const v=d.data();let o=byId.get(d.id);
+      if(o){Object.keys(o).forEach(k=>{if(!(k in v))delete o[k]});Object.assign(o,v)}else o=v;
+      o.id=d.id;next.push(o);seen.add(d.id);FB.shadow[c+'/'+d.id]=canon(o)});
+    Object.keys(FB.shadow).forEach(k=>{if(k.startsWith(c+'/')&&!seen.has(k.slice(c.length+1)))delete FB.shadow[k]});
+    if(FB.merge&&!FB.ready)S[c].forEach(x=>{if(!seen.has(x.id))next.push(x)}); // 初回だけ：端末にしかない記録も残す
+    S[c]=next;
+  }
+  FB.first[c]=true;
+  if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;S.syncUid=FB.user.uid;saveLocal();push();if(FB.merge)toast('このiPadのデータをクラウドに移しました')}
+  saveLocal();header();
+  const a=document.activeElement;if(!(a&&a.matches('main input,main textarea')))render[$('nav button.on').dataset.t]();
+}
+async function startSync(user){
+  const {collection,onSnapshot}=FB.fs;
+  FB.user=user;FB.ready=false;FB.first={};FB.shadow={};FB.merge=S.syncUid!==user.uid;header();
+  FB.unsub=[...COLS,'meta'].map(c=>onSnapshot(collection(FB.db,'users',user.uid,c),{includeMetadataChanges:true},s=>applyRemote(c,s),e=>console.error(e)));
+}
+function stopSync(){(FB.unsub||[]).forEach(f=>f());FB.unsub=[];FB.user=null;FB.ready=false;header()}
+function renderSync(){
+  const el=$('#syncBody');if(!el)return;
+  if(!FIREBASE_CONFIG){el.innerHTML='<p class="sub" style="margin:0">準備中です。今はデータはこの端末の中だけに保存されています。</p>';return}
+  if(FB.user){el.innerHTML=`<p style="margin:0 0 12px">● 同期中：${esc(FB.user.email)}</p><p class="sub" style="margin:0 0 12px">同じメールでログインした iPad・iPhone に自動で反映されます。電波がない間の入力も、つながったときに送られます。</p><button class="btn" id="syncOut">ログアウト</button>`;
+    $('#syncOut').onclick=async()=>{if(!confirm('ログアウトすると、この端末は同期しなくなります。よろしいですか？'))return;stopSync();await FB.auth.signOut(FB.authObj);renderSync()};return}
+  el.innerHTML=`<p class="sub" style="margin:0 0 4px">お店用のメールとパスワードでログインすると、iPadとiPhoneが自動でつながります。</p>
+    <label>メールアドレス</label><input id="syncMail" type="email" autocomplete="username">
+    <label>パスワード</label><input id="syncPass" type="password" autocomplete="current-password">
+    <div class="row" style="margin-top:14px"><button class="btn main" id="syncIn" style="flex:1">ログイン</button><button class="btn" id="syncNew">はじめて使う（登録）</button></div>
+    <p class="sub">「はじめて使う」は最初の1台だけ。2台目からは「ログイン」を押します。</p>`;
+  const go=async(fn,ok)=>{const m=$('#syncMail').value.trim(),p=$('#syncPass').value;if(!m||!p){alert('メールアドレスとパスワードを入れてください');return}
+    try{await fn(FB.authObj,m,p);toast(ok)}
+    catch(e){const c=e.code||'';alert(/email-already-in-use/.test(c)?'このメールは登録済みです。「ログイン」を押してください':/weak-password/.test(c)?'パスワードは6文字以上にしてください':/invalid-email/.test(c)?'メールアドレスの形が正しくありません':/invalid|wrong|not-found|credential/.test(c)?'メールアドレスかパスワードが違います':/network/.test(c)?'ネットにつながっていません':'うまくいきませんでした（'+c+'）')}};
+  $('#syncIn').onclick=()=>go(FB.auth.signInWithEmailAndPassword,'ログインしました');
+  $('#syncNew').onclick=()=>go(FB.auth.createUserWithEmailAndPassword,'登録しました。同期を始めます');
+}
+async function initSync(){
+  if(!FIREBASE_CONFIG)return;
+  try{
+    const [{initializeApp},fs,auth]=await Promise.all([import(SDK+'firebase-app.js'),import(SDK+'firebase-firestore.js'),import(SDK+'firebase-auth.js')]);
+    const app=initializeApp(FIREBASE_CONFIG);
+    FB.fs=fs;FB.auth=auth;
+    FB.db=fs.initializeFirestore(app,{localCache:fs.persistentLocalCache({tabManager:fs.persistentSingleTabManager()})});
+    FB.authObj=auth.initializeAuth(app,{persistence:[auth.indexedDBLocalPersistence,auth.browserLocalPersistence]});
+    auth.onAuthStateChanged(FB.authObj,u=>{if(u&&(!FB.user||FB.user.uid!==u.uid))startSync(u);else if(!u&&FB.user)stopSync();renderSync()});
+  }catch(e){console.error(e)}
+}
+
+header();renderYoyaku();initSync();
 // iPad：データを消されにくくする＋オフライン対応
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js');
