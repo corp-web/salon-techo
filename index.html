@@ -176,6 +176,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
     <label>カルテメモ（今日の施術・薬剤・会話など）</label>
     <textarea id="kMemo" placeholder="例：6トーンのアッシュ。前髪短め希望。来月旅行"></textarea>
     <div class="row" style="margin-top:16px"><button class="btn" id="kClear">やり直す</button><button class="btn main big" id="kDone" style="flex:1">会計する</button></div>
+    <button class="btn" id="kRcpt" style="width:100%;margin-top:10px;display:none">領収書を送る（LINE・メール）</button>
     <button class="btn danger" id="kVoid" style="width:100%;margin-top:10px;display:none">この会計を取り消す</button>
   </div>
 </section>
@@ -204,6 +205,12 @@ dialog h3{margin:0 0 4px;font-size:20px}
 <section id="settei">
   <div class="card"><h2>iPadとiPhoneをつなぐ（自動同期）</h2><div id="syncBody"></div></div>
   <div class="card"><h2>お店の名前</h2><input id="sShop" placeholder="サロン手帳"></div>
+  <div class="card"><h2>領収書に載せる内容</h2>
+    <label style="margin-top:0">住所</label><input id="rcAddr" data-rc="addr" placeholder="例：三重県四日市市〇〇町1-2-3">
+    <label>電話番号</label><input id="rcTel" data-rc="tel" type="tel" placeholder="例：059-000-0000">
+    <label>インボイス登録番号（登録しているお店だけ）</label><input id="rcTno" data-rc="tno" placeholder="例：T1234567890123（なければ空のまま）">
+    <label>但し書き（いつもの文言）</label><input id="rcDef" data-rc="note" placeholder="美容施術代として">
+  </div>
   <div class="card"><h2>営業時間（予約画面の時間の幅）</h2>
     <div class="row"><select id="sFrom" class="sel"></select><span>〜</span><select id="sTo" class="sel"></select></div></div>
   <div class="card"><h2>メニューと料金（税込）</h2><div id="sMenus"></div><button class="btn" id="sAddMenu">＋ メニューを追加</button></div>
@@ -225,6 +232,15 @@ dialog h3{margin:0 0 4px;font-size:20px}
   <label>メニュー</label><div class="chips" id="rMenus"></div>
   <label>メモ</label><input id="rNote" placeholder="例：電話予約、指名あり">
   <div class="dlgbtns"><button class="btn danger" id="rDel">取り消す</button><button class="btn" id="rCancel">閉じる</button><button class="btn main" id="rSave">保存</button></div>
+</dialog>
+
+<!-- 領収書ダイアログ -->
+<dialog id="dlgRcpt">
+  <h3 id="rcTitle">領収書</h3>
+  <div class="row"><div style="flex:1"><label>宛名</label><input id="rcTo" placeholder="例：山田 花子 様／上様"></div></div>
+  <label>但し書き</label><input id="rcNote">
+  <div style="margin-top:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff"><img id="rcImg" alt="領収書の見本" style="display:block;width:100%"></div>
+  <div class="dlgbtns"><button class="btn" id="rcClose">閉じる</button><button class="btn main" id="rcSend">LINE・メールで送る</button></div>
 </dialog>
 
 <!-- お客様ダイアログ -->
@@ -404,7 +420,7 @@ function renderKaikei(){
   const ed=co.editId&&S.sales.find(x=>x.id===co.editId);
   if(co.editId&&!ed)resetCheckout(); // 他の端末で取り消された
   $('#kEditBar').style.display=ed?'':'none';if(ed)$('#kEditBar').textContent=`${jp(ed.date)} ${ed.time} の会計を変更しています`;
-  $('#kDone').textContent=ed?'変更を保存':'会計する';$('#kClear').textContent=ed?'やめる':'やり直す';$('#kVoid').style.display=ed?'':'none';
+  $('#kDone').textContent=ed?'変更を保存':'会計する';$('#kClear').textContent=ed?'やめる':'やり直す';$('#kVoid').style.display=ed?'':'none';$('#kRcpt').style.display=ed?'':'none';
   $('#recvRow').style.display=co.pay==='現金'?'':'none';
   calc();custHint();
 }
@@ -440,9 +456,60 @@ $('#kDone').onclick=()=>{
   const sale={id:uid(),date:$('#kDate').value||today(),time:hm(),customerId:c?c.id:null,name:name||'お客様',items,discount:+$('#kDisc').value||0,total:t,pay:co.pay,memo:$('#kMemo').value.trim()};
   S.sales.push(sale);
   const r=co.resId&&S.reservations.find(x=>x.id===co.resId);if(r){r.status='done';r.saleId=sale.id}
-  save();toast(`会計しました　${yen(t)}`);
+  save();
   resetCheckout();if(r){resDate=r.date;show('yoyaku')}else renderKaikei();
+  openReceipt(sale.id,true);
 };
+
+/* ---- 領収書（画像を作って、iPadの共有でLINE・メールへ） ---- */
+let RC={id:null,blob:null,no:''};
+function rcNo(s){if(s.receipt&&s.receipt.no)return s.receipt.no;
+  const d=s.date.replace(/-/g,''),n=S.sales.filter(x=>x.receipt&&x.receipt.no&&x.receipt.no.startsWith('R'+d)).length+1;return `R${d}-${String(n).padStart(3,'0')}`}
+function drawReceipt(s,to,note,no){
+  const W=800,cv=document.createElement('canvas'),R=S.receipt||{},tno=(R.tno||'').trim();
+  const lines=s.items.length+(s.discount?1:0);const H=1000+lines*44+(tno?60:0);
+  cv.width=W;cv.height=H;const g=cv.getContext('2d'),F='"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo",sans-serif';
+  const T=(t,x,y,size,opt={})=>{g.font=`${opt.b?'700':'400'} ${size}px ${F}`;g.fillStyle=opt.c||'#2f2925';g.textAlign=opt.a||'left';g.fillText(t,x,y)};
+  g.fillStyle='#fff';g.fillRect(0,0,W,H);g.fillStyle='#8c5a3c';g.fillRect(0,0,W,10);
+  let y=110;T(s.receipt?'領収書（再発行）':'領収書',W/2,y,46,{b:1,a:'center'});
+  y+=60;T(`No. ${no}`,60,y,20,{c:'#8a7f74'});T(`発行日 ${s.date.replace(/^(\d+)-(\d+)-(\d+)$/,(m,a,b,c)=>`${a}年${+b}月${+c}日`)}`,W-60,y,20,{c:'#8a7f74',a:'right'});
+  y+=90;T(to||'',60,y,34,{b:1});g.fillStyle='#2f2925';g.fillRect(60,y+16,W-120,2);
+  y+=90;g.fillStyle='#f6eee6';g.fillRect(60,y-58,W-120,96);T('金額',90,y+4,24,{c:'#8a7f74'});T(`${yen(s.total)}-`,W-90,y+12,52,{b:1,a:'right'});
+  y+=90;T(`但し　${note||''}`,60,y,24);y+=44;T('上記正に領収いたしました',60,y,22,{c:'#5b524b'});
+  y+=70;T('内訳',60,y,20,{b:1,c:'#8a7f74'});y+=14;g.fillStyle='#e8dfd4';g.fillRect(60,y,W-120,2);
+  s.items.forEach(it=>{y+=44;T(it.name,60,y,22);T(yen(it.price),W-60,y,22,{a:'right'})});
+  if(s.discount){y+=44;T('値引き',60,y,22);T('-'+yen(s.discount),W-60,y,22,{a:'right'})}
+  y+=20;g.fillStyle='#e8dfd4';g.fillRect(60,y,W-120,2);y+=44;T('合計（税込）',60,y,22,{b:1});T(yen(s.total),W-60,y,24,{b:1,a:'right'});
+  if(tno){y+=44;T(`10%対象 ${yen(s.total)}（内消費税 ${yen(Math.floor(s.total*10/110))}）`,W-60,y,20,{a:'right',c:'#5b524b'})}
+  y+=40;T(`お支払い：${s.pay==='QR'?'QR決済':s.pay}`,W-60,y,20,{a:'right',c:'#5b524b'});
+  y=H-170;T(S.shop||'サロン手帳',W-60,y,30,{b:1,a:'right'});
+  if(R.addr){y+=40;T(R.addr,W-60,y,20,{a:'right',c:'#5b524b'})}
+  if(R.tel){y+=32;T(`TEL ${R.tel}`,W-60,y,20,{a:'right',c:'#5b524b'})}
+  if(tno){y+=32;T(`登録番号 ${tno}`,W-60,y,20,{a:'right',c:'#5b524b'})}
+  return cv}
+function rcPreview(){const s=S.sales.find(x=>x.id===RC.id);if(!s)return;
+  const cv=drawReceipt(s,$('#rcTo').value.trim(),$('#rcNote').value.trim(),RC.no);$('#rcImg').src=cv.toDataURL('image/png');
+  RC.blob=null;cv.toBlob(b=>{RC.blob=b},'image/png')} // 押した瞬間に送れるよう、先に画像を作っておく
+function openReceipt(id,afterPay){const s=S.sales.find(x=>x.id===id);if(!s)return;
+  RC={id,blob:null,no:rcNo(s)};
+  $('#rcTitle').textContent=afterPay?`会計しました　${yen(s.total)}`:'領収書を送る';
+  $('#rcTo').value=s.receipt&&s.receipt.to||(s.customerId?`${s.name} 様`:'上様');
+  $('#rcNote').value=s.receipt&&s.receipt.note||(S.receipt&&S.receipt.note)||'美容施術代として';
+  $('#rcClose').textContent=afterPay?'送らない':'閉じる';
+  rcPreview();$('#dlgRcpt').showModal()}
+let rcT;$('#rcTo').oninput=$('#rcNote').oninput=()=>{clearTimeout(rcT);rcT=setTimeout(rcPreview,250)};
+$('#rcClose').onclick=()=>$('#dlgRcpt').close();
+$('#rcSend').onclick=async()=>{const s=S.sales.find(x=>x.id===RC.id);if(!s)return;
+  if(!RC.blob){alert('準備中です。もう一度押してください');return}
+  const name=`領収書_${RC.no}.png`,file=new File([RC.blob],name,{type:'image/png'});
+  try{
+    if(navigator.canShare&&navigator.canShare({files:[file]}))await navigator.share({files:[file]});
+    else{const a=document.createElement('a');a.href=URL.createObjectURL(RC.blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+  }catch(e){if(e.name==='AbortError')return;alert('送れませんでした');return}
+  // 発行の記録を会計に残す（番号・宛名・但し書き・日時）
+  s.receipt={no:RC.no,to:$('#rcTo').value.trim(),note:$('#rcNote').value.trim(),at:today()+' '+hm()};save();
+  $('#dlgRcpt').close();toast('領収書を送りました')};
+$('#kRcpt').onclick=()=>{if(co.editId)openReceipt(co.editId)};
 
 /* ---- お客様 ---- */
 let editCust=null;
@@ -510,18 +577,20 @@ $('#uToday').onclick=()=>{uDate=today();renderUriage()};
 /* ---- 設定 ---- */
 function renderSettei(){
   $('#sShop').value=S.shop||'';
+  $$('[data-rc]').forEach(i=>{if(document.activeElement!==i)i.value=(S.receipt||{})[i.dataset.rc]||''});
   const opt=(a,b,v)=>{let o='';for(let h=a;h<=b;h++)o+=`<option value="${h}" ${h===v?'selected':''}>${h}:00</option>`;return o};
   $('#sFrom').innerHTML=opt(5,14,hours().from);$('#sTo').innerHTML=opt(15,24,hours().to);
   $('#sMenus').innerHTML=S.menus.map((m,i)=>`<div class="mrow"><input value="${esc(m.name)}" data-i="${i}" data-f="name"><input type="number" inputmode="numeric" value="${m.price}" data-i="${i}" data-f="price"><button class="btn sm danger" data-rm="${i}">✕</button></div>`).join('');
   renderSync();renderVer();
 }
 $('#sShop').oninput=()=>{S.shop=$('#sShop').value.trim();save();header()};
+$$('[data-rc]').forEach(i=>i.oninput=()=>{S.receipt={...(S.receipt||{}),[i.dataset.rc]:i.value.trim()};save()});
 $('#sFrom').onchange=$('#sTo').onchange=()=>{S.hours={from:+$('#sFrom').value,to:+$('#sTo').value};save();toast('営業時間を変えました')};
 $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.menus[t.dataset.i];if(t.dataset.f==='price')m.price=+t.value||0;else m.name=t.value;save()};
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='1.7'; // ←直したら version.json と一緒に上げる
+const APP_VER='1.8'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
@@ -545,7 +614,7 @@ const SDK='https://www.gstatic.com/firebasejs/10.12.2/';
 const COLS=['customers','reservations','sales'];
 const FB={user:null,ready:false,shadow:{},first:{},merge:false};
 const canon=v=>Array.isArray(v)?'['+v.map(canon).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}':JSON.stringify(v===undefined?null:v);
-function localDocs(){const m={};COLS.forEach(c=>S[c].forEach(x=>m[c+'/'+x.id]=x));m['meta/settings']={id:'settings',shop:S.shop||'',menus:S.menus,hours:hours()};return m}
+function localDocs(){const m={};COLS.forEach(c=>S[c].forEach(x=>m[c+'/'+x.id]=x));m['meta/settings']={id:'settings',shop:S.shop||'',menus:S.menus,hours:hours(),receipt:S.receipt||null};return m}
 function schedulePush(){if(!FB.ready)return;clearTimeout(FB.t);FB.t=setTimeout(push,400)}
 async function push(){
   if(!FB.ready)return;const {doc,writeBatch}=FB.fs,cur=localDocs(),ops=[];
@@ -564,7 +633,7 @@ const isDirty=(k,local)=>FB.shadow[k]!==undefined&&canon(local)!==FB.shadow[k];
 function applyRemote(c,snap){
   if(snap.metadata.fromCache&&snap.empty)return; // 端末の控えが空のときは上書きしない
   if(c==='meta'){const d=snap.docs.find(x=>x.id==='settings'),k='meta/settings';
-    if(d&&!isDirty(k,localDocs()[k])){const v=d.data();S.shop=v.shop||'';S.menus=v.menus||[];if(v.hours)S.hours=v.hours;FB.shadow[k]=canon({id:'settings',shop:S.shop,menus:S.menus,hours:v.hours||null})}}
+    if(d&&!isDirty(k,localDocs()[k])){const v=d.data();S.shop=v.shop||'';S.menus=v.menus||[];if(v.hours)S.hours=v.hours;if(v.receipt)S.receipt=v.receipt;FB.shadow[k]=canon({id:'settings',shop:S.shop,menus:S.menus,hours:v.hours||null,receipt:v.receipt||null})}}
   else{
     const byId=new Map(S[c].map(x=>[x.id,x])),next=[],seen=new Set();
     snap.docs.forEach(d=>{const k=c+'/'+d.id,o=byId.get(d.id),v=d.data();seen.add(d.id);
