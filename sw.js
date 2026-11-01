@@ -1,5 +1,5 @@
 // オフラインでも開けるようにする（アプリ本体だけを保存。お客様データはiPad内のみ）
-const CACHE = 'salon-techo-v1';
+const CACHE = 'salon-techo-v2';
 const FILES = ['./', './index.html', './manifest.json', './icon-180.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)));

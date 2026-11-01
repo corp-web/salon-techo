@@ -78,6 +78,21 @@ dialog h3{margin:0 0 4px;font-size:20px}
 #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:14px 22px;border-radius:999px;opacity:0;transition:.25s;pointer-events:none;font-size:16px}
 #toast.on{opacity:1;transform:translateX(-50%)}
 .mrow{display:flex;gap:8px;margin-bottom:8px}.mrow input:first-child{flex:2}.mrow input:nth-child(2){flex:1}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cal .wd{text-align:center;font-size:13px;color:var(--sub);padding:4px 0}
+.cal .day{background:var(--card);border:1px solid var(--line);border-radius:10px;min-height:104px;padding:6px;cursor:pointer;overflow:hidden;min-width:0}
+.cal .day:active{background:var(--soft)}
+.cal .day.out{opacity:.35}
+.cal .day.today{border:2px solid var(--accent)}
+.cal .n{font-size:14px;font-weight:600}
+.cal .sun .n,.cal .wd:first-child{color:var(--warn)}.cal .sat .n,.cal .wd:last-child{color:#4a6a9a}
+.cal .ev{font-size:12px;background:var(--soft);border-radius:6px;padding:2px 5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal .ev.done{opacity:.5}
+.cal .more{font-size:11px;color:var(--sub);margin-top:2px}
+.cal .cnt{display:none}
+@media(max-width:520px){nav{gap:2px;padding:6px 6px 8px}nav button{font-size:12.5px!important;padding:12px 0!important;letter-spacing:-.02em}
+  .cal .day{min-height:58px;padding:4px;text-align:center}.cal .ev,.cal .more{display:none}
+  .cal .cnt{display:block;margin:4px auto 0;width:22px;height:22px;line-height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px}}
 @media(max-width:520px){nav button{font-size:14px}.item .time{width:52px;font-size:17px}.total b{font-size:28px}}
 </style>
 </head>
@@ -85,6 +100,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
 <header><h1 id="shopName">サロン手帳</h1><span class="today" id="hdrDate"></span></header>
 <nav>
   <button data-t="yoyaku" class="on">予約</button>
+  <button data-t="calendar">カレンダー</button>
   <button data-t="kaikei">会計</button>
   <button data-t="okyaku">お客様</button>
   <button data-t="uriage">売上</button>
@@ -101,6 +117,16 @@ dialog h3{margin:0 0 4px;font-size:20px}
   </div>
   <button class="btn main big" id="yAdd">＋ 予約を入れる</button>
   <div class="card" style="margin-top:14px"><div id="yList"></div></div>
+</section>
+
+<!-- カレンダー -->
+<section id="calendar">
+  <div class="datebar">
+    <button class="btn" id="mPrev">◀</button><div class="d" id="mLbl"></div><button class="btn" id="mNext">▶</button>
+    <button class="btn sm" id="mToday">今月</button>
+  </div>
+  <div class="cal" id="cal"></div>
+  <p class="sub" style="text-align:center;margin-top:12px">日にちを押すと、その日の予約が開きます</p>
 </section>
 
 <!-- 会計 -->
@@ -212,7 +238,7 @@ function fillNames(){$('#names').innerHTML=S.customers.map(c=>`<option value="${
 function header(){$('#shopName').textContent=S.shop||'サロン手帳';$('#hdrDate').textContent=jp(today())}
 
 /* ---- タブ ---- */
-const render={yoyaku:renderYoyaku,kaikei:renderKaikei,okyaku:renderOkyaku,uriage:renderUriage,settei:renderSettei};
+const render={yoyaku:renderYoyaku,calendar:renderCal,kaikei:renderKaikei,okyaku:renderOkyaku,uriage:renderUriage,settei:renderSettei};
 function show(t){$$('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));$$('main>section').forEach(s=>s.classList.toggle('on',s.id===t));render[t]();window.scrollTo(0,0)}
 $$('nav button').forEach(b=>b.onclick=()=>show(b.dataset.t));
 
@@ -261,6 +287,28 @@ $('#rSave').onclick=()=>{
 };
 $('#rDel').onclick=()=>{if(!editRes||!confirm(`${editRes.name} 様の予約を取り消しますか？`))return;
   S.reservations=S.reservations.filter(r=>r!==editRes);save();$('#dlgRes').close();renderYoyaku();toast('予約を取り消しました')};
+
+/* ---- カレンダー ---- */
+let calYM=today().slice(0,7);
+function renderCal(){
+  const [y,m]=calYM.split('-').map(Number),first=new Date(y,m-1,1),t=today();
+  $('#mLbl').textContent=`${y}年${m}月`;
+  let h=[...W].map(w=>`<div class="wd">${w}</div>`).join('');
+  for(let i=0;i<42;i++){
+    const d=new Date(y,m-1,1-first.getDay()+i),ds=ymd(d),inM=d.getMonth()===m-1;
+    if(i===35&&!inM)break;
+    const rs=S.reservations.filter(r=>r.date===ds).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+    const cls=['day',inM?'':'out',ds===t?'today':'',d.getDay()===0?'sun':d.getDay()===6?'sat':''].join(' ');
+    h+=`<div class="${cls}" data-d="${ds}"><span class="n">${d.getDate()}</span>${rs.length?`<span class="cnt">${rs.length}</span>`:''}`+
+      rs.slice(0,3).map(r=>`<div class="ev ${r.status==='done'?'done':''}">${r.time?r.time+' ':''}${esc(r.name)}</div>`).join('')+
+      (rs.length>3?`<div class="more">ほか${rs.length-3}件</div>`:'')+`</div>`;
+  }
+  $('#cal').innerHTML=h;
+}
+const shiftMonth=n=>{const [y,m]=calYM.split('-').map(Number);calYM=ymd(new Date(y,m-1+n,1)).slice(0,7);renderCal()};
+$('#mPrev').onclick=()=>shiftMonth(-1);$('#mNext').onclick=()=>shiftMonth(1);
+$('#mToday').onclick=()=>{calYM=today().slice(0,7);renderCal()};
+$('#cal').onclick=e=>{const d=e.target.closest('.day');if(!d)return;resDate=d.dataset.d;show('yoyaku')};
 
 /* ---- 会計 ---- */
 let co={resId:null,items:[],pay:'現金'};
