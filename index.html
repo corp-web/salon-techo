@@ -493,7 +493,7 @@ $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='1.5'; // ←直したら version.json と一緒に上げる
+const APP_VER='1.6'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
@@ -523,31 +523,41 @@ async function push(){
   if(!FB.ready)return;const {doc,writeBatch}=FB.fs,cur=localDocs(),ops=[];
   for(const k in cur){const s=canon(cur[k]);if(FB.shadow[k]!==s){ops.push(['set',k,JSON.parse(JSON.stringify(cur[k]))]);FB.shadow[k]=s}}
   for(const k in FB.shadow)if(!(k in cur)){ops.push(['del',k]);delete FB.shadow[k]}
+  if(ops.length)saveShadow();
   for(let i=0;i<ops.length;i+=400){const b=writeBatch(FB.db);
     ops.slice(i,i+400).forEach(([t,k,d])=>{const r=doc(FB.db,'users',FB.user.uid,...k.split('/'));t==='set'?b.set(r,d):b.delete(r)});
     try{await b.commit()}catch(e){console.error(e);toast('同期できませんでした（あとで自動で再開します）')}}
 }
+// 「最後にクラウドと一致した内容(shadow)」を端末にも保存。これと違う＝まだ送っていない変更なので、クラウドの古い内容で上書きしない
+const SHADOW_KEY=KEY+'-shadow';
+function saveShadow(){try{localStorage.setItem(SHADOW_KEY,JSON.stringify({uid:FB.user&&FB.user.uid,s:FB.shadow}))}catch(e){}}
+function loadShadow(uid){try{const d=JSON.parse(localStorage.getItem(SHADOW_KEY));if(d&&d.uid===uid)return d.s||{}}catch(e){}return{}}
+const isDirty=(k,local)=>FB.shadow[k]!==undefined&&canon(local)!==FB.shadow[k];
 function applyRemote(c,snap){
   if(snap.metadata.fromCache&&snap.empty)return; // 端末の控えが空のときは上書きしない
-  if(c==='meta'){const d=snap.docs.find(x=>x.id==='settings');
-    if(d){const v=d.data();S.shop=v.shop||'';S.menus=v.menus||[];if(v.hours)S.hours=v.hours;FB.shadow['meta/settings']=canon({id:'settings',shop:S.shop,menus:S.menus,hours:v.hours||null})}}
+  if(c==='meta'){const d=snap.docs.find(x=>x.id==='settings'),k='meta/settings';
+    if(d&&!isDirty(k,localDocs()[k])){const v=d.data();S.shop=v.shop||'';S.menus=v.menus||[];if(v.hours)S.hours=v.hours;FB.shadow[k]=canon({id:'settings',shop:S.shop,menus:S.menus,hours:v.hours||null})}}
   else{
     const byId=new Map(S[c].map(x=>[x.id,x])),next=[],seen=new Set();
-    snap.docs.forEach(d=>{const v=d.data();let o=byId.get(d.id);
-      if(o){Object.keys(o).forEach(k=>{if(!(k in v))delete o[k]});Object.assign(o,v)}else o=v;
-      o.id=d.id;next.push(o);seen.add(d.id);FB.shadow[c+'/'+d.id]=canon(o)});
-    Object.keys(FB.shadow).forEach(k=>{if(k.startsWith(c+'/')&&!seen.has(k.slice(c.length+1)))delete FB.shadow[k]});
-    if(FB.merge&&!FB.ready)S[c].forEach(x=>{if(!seen.has(x.id))next.push(x)}); // 初回だけ：端末にしかない記録も残す
+    snap.docs.forEach(d=>{const k=c+'/'+d.id,o=byId.get(d.id),v=d.data();seen.add(d.id);
+      if(o&&isDirty(k,o)){next.push(o);return}                       // 端末で変えたばかり→端末を優先
+      if(!o&&FB.shadow[k]!==undefined&&canon({...v,id:d.id})===FB.shadow[k])return; // 端末で消したばかり→戻さない
+      let x=o;if(x){Object.keys(x).forEach(kk=>{if(!(kk in v))delete x[kk]});Object.assign(x,v)}else x=v;
+      x.id=d.id;next.push(x);FB.shadow[k]=canon(x)});
+    S[c].forEach(x=>{if(seen.has(x.id))return;const k=c+'/'+x.id;
+      if(FB.shadow[k]===undefined)next.push(x);   // まだ送っていない新しい記録→残す
+      else delete FB.shadow[k]});                   // 他の端末で消された→消す
+    Object.keys(FB.shadow).forEach(k=>{if(k.startsWith(c+'/')){const id=k.slice(c.length+1);if(!seen.has(id)&&!byId.has(id))delete FB.shadow[k]}});
     S[c]=next;
   }
   FB.first[c]=true;
-  if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;const was=S.syncUid;S.syncUid=FB.user.uid;delete S.offEdits;saveLocal();push();if(FB.merge)toast(was?'同期を再開しました':'この端末のデータをクラウドに移しました')}
-  saveLocal();header();
+  if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;const was=S.syncUid;S.syncUid=FB.user.uid;delete S.offEdits;if(FB.merge)toast(was?'同期を再開しました':'この端末のデータをクラウドに移しました')}
+  saveLocal();saveShadow();schedulePush();header();
   const a=document.activeElement;if(!(a&&a.matches('main input,main textarea')))render[$('nav button.on').dataset.t]();
 }
 async function startSync(user){
   const {collection,onSnapshot}=FB.fs;
-  FB.user=user;FB.ready=false;FB.first={};FB.shadow={};FB.merge=S.syncUid!==user.uid||!!S.offEdits;header();
+  FB.user=user;FB.ready=false;FB.first={};FB.merge=S.syncUid!==user.uid;FB.shadow=FB.merge?{}:loadShadow(user.uid);header();
   FB.unsub=[...COLS,'meta'].map(c=>onSnapshot(collection(FB.db,'users',user.uid,c),{includeMetadataChanges:true},s=>applyRemote(c,s),e=>console.error(e)));
 }
 function stopSync(){(FB.unsub||[]).forEach(f=>f());FB.unsub=[];FB.user=null;FB.ready=false;header()}
