@@ -219,6 +219,11 @@ dialog h3{margin:0 0 4px;font-size:20px}
   <div class="card"><h2>営業時間（予約画面の時間の幅）</h2>
     <div class="row"><select id="sFrom" class="sel"></select><span>〜</span><select id="sTo" class="sel"></select></div></div>
   <div class="card"><h2>メニューと料金（税込）</h2><div id="sMenus"></div><button class="btn" id="sAddMenu">＋ メニューを追加</button></div>
+  <div class="card"><h2>データの保護（自動の控え）</h2>
+    <p style="margin:0 0 8px">毎日、自動で控えを取っています。<span class="sub">クラウドに約2か月分＋毎月1つずつ、この端末に14日分。</span></p>
+    <p class="sub" style="margin:0 0 12px" id="pLast"></p>
+    <button class="btn" id="pRestore">以前の状態に戻す</button>
+  </div>
   <div class="card"><h2>アプリのバージョン</h2>
     <p style="margin:0 0 12px">現在 <b id="sVer"></b>　<span class="sub" id="sVerMsg"></span></p>
     <p class="sub" style="margin:0 0 12px">アップデートしても、ログインもデータもそのまま残ります。</p>
@@ -237,6 +242,14 @@ dialog h3{margin:0 0 4px;font-size:20px}
   <label>メニュー</label><div class="chips" id="rMenus"></div>
   <label>メモ</label><input id="rNote" placeholder="例：電話予約、指名あり">
   <div class="dlgbtns"><button class="btn danger" id="rDel">取り消す</button><button class="btn" id="rCancel">閉じる</button><button class="btn main" id="rSave">保存</button></div>
+</dialog>
+
+<!-- 以前の状態に戻す -->
+<dialog id="dlgSnap">
+  <h3>以前の状態に戻す</h3>
+  <p class="sub" style="margin-top:0">戻したい日時を選んでください。戻す前の今の状態も控えに残すので、あとから元に戻すこともできます。</p>
+  <div id="snapList"></div>
+  <div class="dlgbtns"><button class="btn" id="snapClose">閉じる</button></div>
 </dialog>
 
 <!-- 領収書ダイアログ -->
@@ -278,9 +291,9 @@ const W='日月火水木金土';
 const jp=s=>{const d=new Date(s+'T00:00');return `${d.getMonth()+1}月${d.getDate()}日(${W[d.getDay()]})`};
 const sumOf=a=>a.reduce((x,s)=>x+s.total,0);
 
-function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.menus)return d}catch(e){}
+function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.menus)return d}catch(e){try{const raw=localStorage.getItem(KEY);if(raw)localStorage.setItem(KEY+'-broken-'+Date.now(),raw)}catch(e2){}}
   return{shop:'',menus:DEFAULT_MENUS.map(m=>({...m})),customers:[],reservations:[],sales:[],lastBackup:''}}
-function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('保存できませんでした。バックアップを取ってください。')}}
+function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('この端末に保存できませんでした（空き容量をご確認ください）。クラウドには送られています。')}}
 function save(){if(S.syncUid&&!FB.ready)S.offEdits=true;saveLocal();schedulePush()} // 同期が切れている間の入力は、再ログイン時に消さずに合流させる
 let S=load();
 
@@ -601,7 +614,7 @@ function renderSettei(){
   const opt=(a,b,v)=>{let o='';for(let h=a;h<=b;h++)o+=`<option value="${h}" ${h===v?'selected':''}>${h}:00</option>`;return o};
   $('#sFrom').innerHTML=opt(5,14,hours().from);$('#sTo').innerHTML=opt(15,24,hours().to);
   $('#sMenus').innerHTML=S.menus.map((m,i)=>`<div class="mrow"><input value="${esc(m.name)}" data-i="${i}" data-f="name"><input type="number" inputmode="numeric" value="${m.price}" data-i="${i}" data-f="price"><button class="btn sm danger" data-rm="${i}">✕</button></div>`).join('');
-  renderSync();renderVer();
+  renderSync();renderVer();renderProtect();
 }
 $('#sShop').oninput=()=>{S.shop=$('#sShop').value.trim();save();header()};
 $$('[data-rc]').forEach(i=>i.oninput=()=>{S.receipt={...(S.receipt||{}),[i.dataset.rc]:i.value.trim()};save()});
@@ -610,7 +623,7 @@ $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='1.9'; // ←直したら version.json と一緒に上げる
+const APP_VER='2.0'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
@@ -625,6 +638,59 @@ $('#sUpdate').onclick=async()=>{
     if(window.caches)for(const k of await caches.keys())await caches.delete(k)}catch(e){}
   location.reload(); // データは消えません（クラウドと端末に残る）
 };
+
+/* ---- データの保護：毎日の自動の控え（クラウド＋この端末）と、以前の状態に戻す ---- */
+// クラウドの控えは、セキュリティルールで「作成のみ・書き換え不可・60日たつまで削除不可」。アプリに不具合があっても消せない
+const snapData=()=>JSON.parse(JSON.stringify({shop:S.shop||'',menus:S.menus,hours:S.hours||null,receipt:S.receipt||null,customers:S.customers,reservations:S.reservations,sales:S.sales}));
+const cntOf=d=>({c:(d.customers||[]).length,r:(d.reservations||[]).length,s:(d.sales||[]).length});
+const cntTxt=c=>c?`お客様${c.c}人・予約${c.r}件・会計${c.s}件`:'';
+const emptyData=d=>!(d.customers.length||d.reservations.length||d.sales.length);
+const DEV=(()=>{try{let v=localStorage.getItem(KEY+'-dev');if(!v){v=uid();localStorage.setItem(KEY+'-dev',v)}return v}catch(e){return 'x'}})();
+function idb(){return new Promise((ok,ng)=>{const q=indexedDB.open('salon-techo-snap',1);q.onupgradeneeded=()=>q.result.createObjectStore('snaps',{keyPath:'key'});q.onsuccess=()=>ok(q.result);q.onerror=()=>ng(q.error)})}
+async function localSnap(key){const d=snapData();if(emptyData(d))return;
+  try{const db=await idb();await new Promise((ok,ng)=>{const t=db.transaction('snaps','readwrite'),st=t.objectStore('snaps');st.put({key,at:Date.now(),data:d});
+    const all=st.getAll();all.onsuccess=()=>{const daily=all.result.filter(x=>/^\d{4}-\d\d-\d\d$/.test(x.key)).sort((a,b)=>b.key.localeCompare(a.key)),other=all.result.filter(x=>!/^\d{4}-\d\d-\d\d$/.test(x.key)).sort((a,b)=>b.at-a.at);
+      daily.slice(14).forEach(x=>st.delete(x.key));other.slice(5).forEach(x=>st.delete(x.key))};
+    t.oncomplete=ok;t.onerror=()=>ng(t.error)})}catch(e){console.error(e)}}
+async function listLocal(){try{const db=await idb();return await new Promise(ok=>{const q=db.transaction('snaps').objectStore('snaps').getAll();q.onsuccess=()=>ok(q.result);q.onerror=()=>ok([])})}catch(e){return[]}}
+function cloudBackup(tag){if(!FB.ready)return Promise.resolve(false);const d=snapData();if(emptyData(d))return Promise.resolve(false);
+  const {doc,writeBatch,serverTimestamp}=FB.fs,str=JSON.stringify(d),N=200000,n=Math.max(1,Math.ceil(str.length/N)),date=today(),id=`${date}-${tag}-${Date.now().toString(36)}-${DEV}`;
+  const b=writeBatch(FB.db);for(let i=0;i<n;i++)b.set(doc(FB.db,'users',FB.user.uid,'backups',`${id}-p${i}`),{date,id,tag,i,n,at:serverTimestamp(),cnt:cntOf(d),d:str.slice(i*N,(i+1)*N)});
+  return b.commit().then(()=>true)}
+async function pruneBackups(){try{const {collection,query,where,getDocs,deleteDoc,Timestamp}=FB.fs;
+  const qs=await getDocs(query(collection(FB.db,'users',FB.user.uid,'backups'),where('at','<',Timestamp.fromMillis(Date.now()-62*864e5))));
+  const first={};qs.docs.forEach(x=>{const v=x.data(),m=v.date.slice(0,7);if(!first[m]||v.id<first[m])first[m]=v.id}); // 古いものも、毎月1つは残す
+  const keep=new Set(Object.values(first));for(const x of qs.docs)if(!keep.has(x.data().id))await deleteDoc(x.ref)}catch(e){console.error(e)}}
+let protecting=false;
+async function dailyProtect(){const t=today();localSnap(t);
+  if(!FB.ready||protecting)return;let last='';try{last=localStorage.getItem(KEY+'-bk')||''}catch(e){}
+  if(last.slice(0,10)===t)return;protecting=true;
+  try{if(await cloudBackup('day')){try{localStorage.setItem(KEY+'-bk',t+' '+hm())}catch(e){}renderProtect();pruneBackups()}}catch(e){console.error(e)}
+  protecting=false}
+function renderProtect(){const el=$('#pLast');if(!el)return;let last='';try{last=localStorage.getItem(KEY+'-bk')||''}catch(e){}
+  el.textContent=last?`クラウドへの最後の控え：${jp(last.slice(0,10))} ${last.slice(11)}`:(FB.user?'クラウドへの控えは、まもなく自動で取ります':'ログインすると、クラウドにも控えを取ります（今はこの端末だけ）')}
+function applySnap(d){S.shop=d.shop||'';if(d.menus)S.menus=d.menus;if(d.hours)S.hours=d.hours;S.receipt=d.receipt||null;
+  S.customers=d.customers||[];S.reservations=d.reservations||[];S.sales=d.sales||[];save();header();render[$('nav button.on').dataset.t]()}
+const SNAP={};
+$('#pRestore').onclick=async()=>{$('#snapList').innerHTML='<p class="sub">読み込み中…</p>';$('#dlgSnap').showModal();
+  const items=[];(await listLocal()).forEach(x=>items.push({src:'local',key:x.key,at:x.at,cnt:cntOf(x.data),tag:/^\d{4}-/.test(x.key)?'day':'mae'}));
+  if(FB.ready){try{const {collection,query,where,getDocs}=FB.fs;const qs=await getDocs(query(collection(FB.db,'users',FB.user.uid,'backups'),where('i','==',0)));
+    qs.docs.forEach(x=>{const v=x.data();items.push({src:'cloud',key:v.id,at:v.at?v.at.toMillis():Date.now(),cnt:v.cnt,tag:v.tag})})}catch(e){console.error(e)}}
+  items.sort((a,b)=>b.at-a.at);
+  const lbl=x=>{const d=new Date(x.at);return `${jp(ymd(d))} ${pad(d.getHours())}:${pad(d.getMinutes())}`};
+  $('#snapList').innerHTML=items.length?items.map((x,i)=>{SNAP[i]=x;return `<div class="item" data-i="${i}" style="cursor:pointer"><div class="body"><div class="name" style="font-size:16px">${lbl(x)}${x.tag==='mae'?'<span class="sub">（戻す前の状態）</span>':''}</div><div class="sub">${cntTxt(x.cnt)}・${x.src==='cloud'?'クラウド':'この端末'}</div></div><span class="sub">›</span></div>`}).join('')
+    :'<p class="empty">まだ控えがありません（明日から毎日たまります）</p>'};
+$('#snapList').onclick=async e=>{const el=e.target.closest('[data-i]');if(!el)return;const x=SNAP[el.dataset.i],d0=new Date(x.at);
+  if(!confirm(`${jp(ymd(d0))} ${pad(d0.getHours())}:${pad(d0.getMinutes())} の状態に戻します。\n（${cntTxt(x.cnt)}）\n\n今の状態も控えに残すので、あとから元に戻せます。よろしいですか？`))return;
+  try{let d;
+    if(x.src==='local')d=(await listLocal()).find(y=>y.key===x.key).data;
+    else{const {collection,query,where,getDocs}=FB.fs;const qs=await getDocs(query(collection(FB.db,'users',FB.user.uid,'backups'),where('id','==',x.key)));
+      const parts=qs.docs.map(y=>y.data()).sort((a,b)=>a.i-b.i);if(!parts.length||parts.length!==parts[0].n)throw new Error('控えが欠けています');d=JSON.parse(parts.map(y=>y.d).join(''))}
+    if(!d||!Array.isArray(d.sales))throw new Error('控えが読めません');
+    const k='before-'+Date.now();await localSnap(k);if(FB.ready)cloudBackup('mae').catch(console.error); // 戻す前の今の状態を、端末とクラウドの両方に残す
+    applySnap(d);$('#dlgSnap').close();toast('以前の状態に戻しました')
+  }catch(err){console.error(err);alert('読み込めませんでした。電波のよい所でもう一度お試しください')}};
+$('#snapClose').onclick=()=>$('#dlgSnap').close();
 
 /* ---- 自動同期（Firebase 無料プラン） ---- */
 // 準備ができたら、Firebaseの設定をここに入れる。nullの間は同期なし（今まで通り端末内だけ）
@@ -680,7 +746,7 @@ function applyRemote(c,snap){
     S[c]=next;
   }
   FB.first[c]=true;
-  if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;const was=S.syncUid;S.syncUid=FB.user.uid;delete S.offEdits;if(FB.merge)toast(was?'同期を再開しました':'この端末のデータをクラウドに移しました')}
+  if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;const was=S.syncUid;S.syncUid=FB.user.uid;delete S.offEdits;if(FB.merge)toast(was?'同期を再開しました':'この端末のデータをクラウドに移しました');setTimeout(dailyProtect,3000);setTimeout(kickSync,8000)}
   saveLocal();saveShadow();schedulePush();header();
   const a=document.activeElement;if(!(a&&a.matches('main input,main textarea')))render[$('nav button.on').dataset.t]();
 }
@@ -736,8 +802,11 @@ async function autoUpdate(){const v=await checkUpdate();if(!v||v===APP_VER)retur
   try{const reg=navigator.serviceWorker&&await navigator.serviceWorker.getRegistration();if(reg)await reg.update();
     if(window.caches)for(const k of await caches.keys())await caches.delete(k)}catch(e){}
   location.reload()}
-autoUpdate();
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')autoUpdate()});
+autoUpdate();setTimeout(dailyProtect,6000);
+// 受信が止まったままになるのを防ぐ：画面に戻ったとき・2分ごとに、クラウドとの接続をつなぎ直す（送っていない入力は消えない）
+async function kickSync(){if(!FB.ready||FB.kicking)return;FB.kicking=true;try{await FB.fs.disableNetwork(FB.db);await FB.fs.enableNetwork(FB.db)}catch(e){console.error(e)}FB.kicking=false}
+setInterval(()=>{if(document.visibilityState==='visible')kickSync()},120000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){autoUpdate();dailyProtect();kickSync()}else localSnap(today())});
 </script>
 </body>
 </html>
