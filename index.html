@@ -94,11 +94,12 @@ dialog h3{margin:0 0 4px;font-size:20px}
 .tl .blk.done{opacity:.55;border-left-color:var(--ok)}
 .tl .blk .t{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tl .blk .nm{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tl .blk .pay{float:right;margin:0 0 2px 6px;padding:5px 10px;font-size:13px}
-.tl .blk.short{display:flex;align-items:center;gap:6px;padding:2px 6px 2px 8px;flex-direction:row-reverse;justify-content:flex-end}
-.tl .blk.short .nm{flex:1;min-width:0}.tl .blk.short .t{display:inline;font-size:12px}
-.tl .blk.short .pay{float:none;margin:0;padding:3px 9px}
-@media(max-width:520px){.tl .blk{padding:4px 6px}.tl .blk .pay{float:none;display:inline-block;margin:0 0 3px}.tl .blk.short .pay{display:block}}
+.tl .blk .r1{display:flex;align-items:center;gap:6px;min-height:28px}
+.tl .blk .r1 .nm{flex:1;min-width:0}
+.tl .blk .pay{float:none;flex:none;margin:0;padding:4px 10px;font-size:13px}
+.tl .blk.short{padding:2px 6px 2px 8px;display:flex;align-items:center}.tl .blk.short .r1{flex:1;min-width:0}
+.tl .blk.short .nm .t{display:inline;font-size:12px;margin-right:4px}
+@media(max-width:520px){.tl .blk{padding:3px 6px}.tl .blk .pay{padding:3px 8px}}
 .tl .now{position:absolute;left:-4px;right:0;border-top:2px solid var(--warn);z-index:3;pointer-events:none}
 .tl .now::before{content:'';position:absolute;left:-5px;top:-6px;width:10px;height:10px;border-radius:50%;background:var(--warn)}
 .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
@@ -335,9 +336,9 @@ function renderYoyaku(){
   h+=`<div class="hr last"><span>${to/60}:00</span></div><div class="lane" style="height:${(to-from)*px}px">`;
   h+=items.map(({r,s,e,col,n})=>{const done=r.status==='done',sale=done&&S.sales.find(x=>x.id===r.saleId),ht=Math.max(30,(e-s)*px-3);
     const short=ht<60,payB=done?`<span class="tag pay" data-sale="${r.saleId||''}" style="cursor:pointer">済${n>1&&innerWidth<=520?'':' '+(sale?yen(sale.total):'')}</span>`:`<button class="btn main sm pay" data-pay="${r.id}">会計</button>`;
-    return `<div class="blk ${done?'done':''} ${short?'short':''}" data-id="${r.id}" style="top:${(s-from)*px+1}px;height:${ht}px;left:calc(${col/n*100}% + 2px);width:calc(${100/n}% - 4px)">${payB}`+
-      (short?`<div class="nm"><span class="t">${toHM(s)}</span> ${esc(r.name)} 様</div>`
-      :`<div class="t">${toHM(s)}〜${toHM(e)}</div><div class="nm">${esc(r.name)} 様</div><div class="t">${esc((r.menus||[]).join('・'))}${r.note?'　'+esc(r.note):''}</div>`)+`</div>`}).join('');
+    return `<div class="blk ${done?'done':''} ${short?'short':''}" data-id="${r.id}" style="top:${(s-from)*px+1}px;height:${ht}px;left:calc(${col/n*100}% + 2px);width:calc(${100/n}% - 4px)">`+
+      (short?`<div class="r1"><div class="nm"><span class="t">${toHM(s)}</span>${esc(r.name)} 様</div>${payB}</div>`
+      :`<div class="r1"><div class="nm">${esc(r.name)} 様</div>${payB}</div><div class="t">${toHM(s)}〜${toHM(e)}${ht<90&&(r.menus||[]).length?'・'+esc(r.menus.join('・')):''}</div>${ht>=90?`<div class="t">${esc((r.menus||[]).join('・'))}${r.note?'　'+esc(r.note):''}</div>`:''}`)+`</div>`}).join('');
   const now=new Date(),nm=now.getHours()*60+now.getMinutes();
   if(resDate===today()&&nm>=from&&nm<=to)h+=`<div class="now" style="top:${(nm-from)*px}px"></div>`;
   $('#yList').innerHTML=h+'</div>';
@@ -623,7 +624,7 @@ $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='2.0'; // ←直したら version.json と一緒に上げる
+const APP_VER='2.1'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
