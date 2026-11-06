@@ -235,12 +235,13 @@ dialog h3{margin:0 0 4px;font-size:20px}
 
 <!-- 予約ダイアログ -->
 <dialog id="dlgRes">
-  <h3 id="rTitle">予約</h3>
+  <h3 id="rTitle" tabindex="-1" autofocus style="outline:none">予約</h3>
   <label>日付</label><input id="rDate" type="date">
   <div class="row"><div style="flex:1"><label>開始</label><input id="rTime" type="time" step="900"></div><span style="padding-top:34px">〜</span><div style="flex:1"><label>終了</label><input id="rEnd" type="time" step="900"></div></div>
   <div class="chips" id="rDur" style="margin-top:8px"><button type="button" class="chip" data-m="30">30分</button><button type="button" class="chip" data-m="60">1時間</button><button type="button" class="chip" data-m="90">1時間半</button><button type="button" class="chip" data-m="120">2時間</button><button type="button" class="chip" data-m="180">3時間</button></div>
   <label>お名前</label><input id="rName" list="names" placeholder="例：山田 花子">
   <label>メニュー</label><div class="chips" id="rMenus"></div>
+  <div id="rItems" style="margin-top:10px"></div>
   <label>メモ</label><input id="rNote" placeholder="例：電話予約、指名あり">
   <div class="dlgbtns"><button class="btn danger" id="rDel">取り消す</button><button class="btn" id="rCancel">閉じる</button><button class="btn main" id="rSave">保存</button></div>
 </dialog>
@@ -291,6 +292,10 @@ const addDay=(s,n)=>{const d=new Date(s+'T00:00');d.setDate(d.getDate()+n);retur
 const W='日月火水木金土';
 const jp=s=>{const d=new Date(s+'T00:00');return `${d.getMonth()+1}月${d.getDate()}日(${W[d.getDay()]})`};
 const sumOf=a=>a.reduce((x,s)=>x+s.total,0);
+// 予約の金額：その予約で変えた金額があればそれ、なければ設定のメニュー料金
+const menuPrice=n=>{const m=S.menus.find(x=>x.name===n);return m?+m.price||0:0};
+const resPrice=(r,n)=>{const it=(r.items||[]).find(x=>x.name===n);return it?+it.price||0:menuPrice(n)};
+const resEst=r=>(r.menus||[]).reduce((a,n)=>a+resPrice(r,n),0);
 
 function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.menus)return d}catch(e){try{const raw=localStorage.getItem(KEY);if(raw)localStorage.setItem(KEY+'-broken-'+Date.now(),raw)}catch(e2){}}
   return{shop:'',menus:DEFAULT_MENUS.map(m=>({...m})),customers:[],reservations:[],sales:[],lastBackup:''}}
@@ -338,7 +343,7 @@ function renderYoyaku(){
     const short=ht<60,payB=done?`<span class="tag pay" data-sale="${r.saleId||''}" style="cursor:pointer">済${n>1&&innerWidth<=520?'':' '+(sale?yen(sale.total):'')}</span>`:`<button class="btn main sm pay" data-pay="${r.id}">会計</button>`;
     return `<div class="blk ${done?'done':''} ${short?'short':''}" data-id="${r.id}" style="top:${(s-from)*px+1}px;height:${ht}px;left:calc(${col/n*100}% + 2px);width:calc(${100/n}% - 4px)">`+
       (short?`<div class="r1"><div class="nm"><span class="t">${toHM(s)}</span>${esc(r.name)} 様</div>${payB}</div>`
-      :`<div class="r1"><div class="nm">${esc(r.name)} 様</div>${payB}</div><div class="t">${toHM(s)}〜${toHM(e)}${ht<90&&(r.menus||[]).length?'・'+esc(r.menus.join('・')):''}</div>${ht>=90?`<div class="t">${esc((r.menus||[]).join('・'))}${r.note?'　'+esc(r.note):''}</div>`:''}`)+`</div>`}).join('');
+      :`<div class="r1"><div class="nm">${esc(r.name)} 様</div>${payB}</div><div class="t">${toHM(s)}〜${toHM(e)}${!done&&resEst(r)?'・'+yen(resEst(r)):''}${ht<90&&(r.menus||[]).length?'・'+esc(r.menus.join('・')):''}</div>${ht>=90?`<div class="t">${esc((r.menus||[]).join('・'))}${r.note?'　'+esc(r.note):''}</div>`:''}`)+`</div>`}).join('');
   const now=new Date(),nm=now.getHours()*60+now.getMinutes();
   if(resDate===today()&&nm>=from&&nm<=to)h+=`<div class="now" style="top:${(nm-from)*px}px"></div>`;
   $('#yList').innerHTML=h+'</div>';
@@ -359,17 +364,24 @@ $('#yNext').onclick=()=>{resDate=addDay(resDate,1);renderYoyaku()};
 $('#yToday').onclick=()=>{resDate=today();renderYoyaku()};
 $('#yAdd').onclick=()=>openRes(null);
 
-function chips(sel,arr){const el=$(sel);
+function chips(sel,arr,after){const el=$(sel);
   el.innerHTML=S.menus.map(m=>`<button type="button" class="chip ${arr.includes(m.name)?'on':''}" data-n="${esc(m.name)}">${esc(m.name)}</button>`).join('');
-  el.onclick=e=>{const b=e.target.closest('.chip');if(!b)return;const i=arr.indexOf(b.dataset.n);i<0?arr.push(b.dataset.n):arr.splice(i,1);b.classList.toggle('on')}}
+  el.onclick=e=>{const b=e.target.closest('.chip');if(!b)return;const i=arr.indexOf(b.dataset.n);i<0?arr.push(b.dataset.n):arr.splice(i,1);b.classList.toggle('on');if(after)after()}}
+let resPx={};
+const rItems=()=>resMenus.map(n=>({name:n,base:menuPrice(n),price:n in resPx?resPx[n]:menuPrice(n)}));
+function renderRItems(){const it=rItems();
+  $('#rItems').innerHTML=it.length?it.map(x=>`<div class="line ${x.base!==x.price?'chg':''}"><span>${esc(x.name)}${x.base!==x.price?`<span class="sub">（通常 ${yen(x.base)}）</span>`:''}</span><span class="lp">¥<input class="pin" type="number" inputmode="numeric" value="${x.price}" data-n="${esc(x.name)}" aria-label="金額"></span></div>`).join('')
+    +`<div class="line" style="font-weight:600"><span>合計（見込み）</span><span id="rTotal">${yen(it.reduce((a,b)=>a+b.price,0))}</span></div>`:''}
+$('#rItems').oninput=e=>{const n=e.target.dataset.n;if(n==null)return;resPx[n]=Math.max(0,+e.target.value||0);$('#rTotal').textContent=yen(rItems().reduce((a,b)=>a+b.price,0))};
+$('#rItems').onchange=e=>{if(e.target.dataset.n!=null)renderRItems()};
 function openRes(id,presetName,presetTime){
   editRes=id?S.reservations.find(r=>r.id===id):null;
   const r=editRes||{date:resDate,time:presetTime||'10:00',name:presetName||'',menus:[],note:''};
   $('#rTitle').textContent=editRes?'予約の変更':'予約を入れる';
   $('#rDate').value=r.date;$('#rTime').value=r.time;$('#rEnd').value=toHM(endOf(r));$('#rName').value=r.name;$('#rNote').value=r.note||'';
-  resMenus=[...(r.menus||[])];chips('#rMenus',resMenus);
+  resMenus=[...(r.menus||[])];resPx={};(r.items||[]).forEach(x=>resPx[x.name]=+x.price||0);chips('#rMenus',resMenus,renderRItems);
   $('#rDel').style.display=editRes&&editRes.status!=='done'?'':'none';
-  fillNames();$('#dlgRes').showModal();
+  renderRItems();fillNames();$('#dlgRes').showModal();$('#rTitle').focus();
 }
 $('#rCancel').onclick=()=>$('#dlgRes').close();
 // 所要時間ボタン：開始から◯分後を終了に
@@ -384,7 +396,7 @@ $('#rSave').onclick=()=>{
   if(!st||!en){alert('開始と終了の時間を入れてください');return}
   if(toMin(en)<=toMin(st)){alert('終了は開始より後の時間にしてください');return}
   const c=ensureCust(name);
-  const d={date:$('#rDate').value||resDate,time:st,end:en,name,customerId:c.id,menus:[...resMenus],note:$('#rNote').value.trim()};
+  const d={date:$('#rDate').value||resDate,time:st,end:en,name,customerId:c.id,menus:[...resMenus],items:rItems().map(({name,price})=>({name,price})),note:$('#rNote').value.trim()};
   if(editRes)Object.assign(editRes,d);else S.reservations.push({id:uid(),status:'yoyaku',...d});
   save();resDate=d.date;$('#dlgRes').close();show('yoyaku');toast(editRes?'予約を変更しました':'予約を入れました');
 };
@@ -418,7 +430,7 @@ let co={resId:null,items:[],pay:'現金',editId:null};
 function resetCheckout(){co={resId:null,items:[],pay:'現金',editId:null};['#kName','#kDisc','#kMemo','#kRecv','#kOName','#kOPrice'].forEach(s=>$(s).value='');$('#kDate').value=today()}
 function startCheckout(r,name){
   resetCheckout();
-  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>{const m=S.menus.find(x=>x.name===n);co.items.push({name:n,price:m?m.price:0,base:m?m.price:0})});$('#kName').value=r.name;$('#kDate').value=r.date}
+  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>co.items.push({name:n,price:resPrice(r,n),base:menuPrice(n)}));$('#kName').value=r.name;$('#kDate').value=r.date}
   else if(name)$('#kName').value=name;
   show('kaikei');
 }
@@ -573,7 +585,6 @@ $('#cToPay').onclick=()=>{if(!saveCust())return;$('#dlgCust').close();startCheck
 /* ---- 売上 ---- */
 let uDate=today();
 const addMon=(ym,k)=>{let [y,m]=ym.split('-').map(Number);m+=k;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return `${y}-${String(m).padStart(2,'0')}`};
-const resEst=r=>(r.menus||[]).reduce((a,n)=>{const m=S.menus.find(x=>x.name===n);return a+(m?+m.price||0:0)},0);
 const pendingRes=pre=>S.reservations.filter(r=>r.status!=='done'&&r.date&&r.date.startsWith(pre)&&r.date>=today());
 function forecast(ym){const mon=S.sales.filter(s=>s.date.startsWith(ym)),rs=pendingRes(ym),est=rs.reduce((a,r)=>a+resEst(r),0);
   return{sold:sumOf(mon),ns:mon.length,est,nr:rs.length,nm:rs.filter(r=>!(r.menus||[]).length).length,total:sumOf(mon)+est}}
@@ -624,7 +635,7 @@ $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='2.1'; // ←直したら version.json と一緒に上げる
+const APP_VER='2.2'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
