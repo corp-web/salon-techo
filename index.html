@@ -309,7 +309,8 @@ function ensureCust(n){n=(n||'').trim();if(!n)return null;let c=custByName(n);if
 function fillNames(){$('#names').innerHTML=S.customers.map(c=>`<option value="${esc(c.name)}">`).join('')}
 function header(){$('#shopName').textContent=S.shop||'サロン手帳';const h=$('#hdrDate');
   const cut=FB.authChecked&&!FB.user&&S.syncUid; // 以前つないでいたのに、今はログインが切れている
-  h.innerHTML=esc(jp(today()))+(FB.user?'　<span style="color:var(--ok)">● 同期中</span>':cut?'　<span style="color:var(--warn);cursor:pointer" onclick="show(\'settei\')">⚠ 同期が切れています（押して再ログイン）</span>':'')}
+  const st=!FB.user?'':!navigator.onLine?'<span style="color:var(--warn)">● 電波なし（つながったら送ります）</span>':pendCount()?'<span style="color:var(--warn)">● 送信中…</span>':'<span style="color:var(--ok)">● 同期済み</span>';
+  h.innerHTML=esc(jp(today()))+(FB.user?'　'+st:cut?'　<span style="color:var(--warn);cursor:pointer" onclick="show(\'settei\')">⚠ 同期が切れています（押して再ログイン）</span>':'')}
 
 /* ---- タブ ---- */
 const render={yoyaku:renderYoyaku,calendar:renderCal,kaikei:renderKaikei,okyaku:renderOkyaku,uriage:renderUriage,settei:renderSettei};
@@ -635,7 +636,7 @@ $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='2.2'; // ←直したら version.json と一緒に上げる
+const APP_VER='2.3'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
@@ -710,32 +711,40 @@ $('#snapClose').onclick=()=>$('#dlgSnap').close();
 const FIREBASE_CONFIG={apiKey:'AIzaSyDGyfdjRb055c3ICmpPLSBL8OpCG2h4UjQ',authDomain:'salon-techo.firebaseapp.com',projectId:'salon-techo',storageBucket:'salon-techo.firebasestorage.app',messagingSenderId:'623463517972',appId:'1:623463517972:web:5e6b3b8712b67c9e17bc01'};
 const SDK='https://www.gstatic.com/firebasejs/10.12.2/';
 const COLS=['customers','reservations','sales'];
-const FB={user:null,ready:false,shadow:{},first:{},merge:false};
+const FB={user:null,ready:false,shadow:{},first:{},merge:false,pend:{}};
 const canon=v=>Array.isArray(v)?'['+v.map(canon).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}':JSON.stringify(v===undefined?null:v);
 function localDocs(){const m={};COLS.forEach(c=>S[c].forEach(x=>m[c+'/'+x.id]=x));m['meta/settings']={id:'settings',shop:S.shop||'',menus:S.menus,hours:hours(),receipt:S.receipt||null};return m}
-function schedulePush(){if(!FB.ready)return;clearTimeout(FB.t);FB.t=setTimeout(push,400)}
+function schedulePush(){if(!FB.ready)return;clearTimeout(FB.t);FB.t=setTimeout(push,250)}
 async function push(){
   if(!FB.ready)return;const {doc,writeBatch}=FB.fs,cur=localDocs(),ops=[];
   for(const k in cur){const s=canon(cur[k]);if(FB.shadow[k]!==s){let d=JSON.parse(JSON.stringify(cur[k])),t='set';
     // 設定は変えた項目だけ送る（2台で別々の項目を同時に変えても、両方残る）
     if(k==='meta/settings'&&FB.shadow[k]!==undefined){let sh={};try{sh=JSON.parse(FB.shadow[k])}catch(e){}
       const p={};Object.keys(d).forEach(f=>{if(canon(d[f])!==canon(sh[f]))p[f]=d[f]===undefined?null:d[f]});d=p;t='merge'}
-    ops.push([t,k,d]);FB.shadow[k]=s}}
-  for(const k in FB.shadow)if(!(k in cur)){ops.push(['del',k]);delete FB.shadow[k]}
-  if(ops.length)saveShadow();
-  for(let i=0;i<ops.length;i+=400){const b=writeBatch(FB.db);
-    ops.slice(i,i+400).forEach(([t,k,d])=>{const r=doc(FB.db,'users',FB.user.uid,...k.split('/'));t==='set'?b.set(r,d):t==='merge'?b.set(r,d,{merge:true}):b.delete(r)});
-    try{await b.commit()}catch(e){console.error(e);toast('同期できませんでした（あとで自動で再開します）')}}
+    ops.push([t,k,d]);FB.shadow[k]=s;FB.pend[k]=s}}
+  for(const k in FB.shadow)if(!(k in cur)){ops.push(['del',k]);delete FB.shadow[k];FB.pend[k]=null}
+  for(const k in FB.pend)if(FB.pend[k]===null&&!(k in cur)&&!ops.some(o=>o[1]===k))ops.push(['del',k]); // 前回送れなかった削除
+  if(!ops.length)return;
+  saveShadow();savePend();header();
+  for(let i=0;i<ops.length;i+=400){const b=writeBatch(FB.db),part=ops.slice(i,i+400),sent=part.map(([t,k])=>[k,FB.pend[k]]);
+    part.forEach(([t,k,d])=>{const r=doc(FB.db,'users',FB.user.uid,...k.split('/'));t==='set'?b.set(r,d):t==='merge'?b.set(r,d,{merge:true}):b.delete(r)});
+    b.commit().then(()=>{sent.forEach(([k,v])=>{if(k in FB.pend&&FB.pend[k]===v)delete FB.pend[k]});savePend();header()}) // クラウドに届いた
+      .catch(e=>{console.error(e);toast('同期できませんでした（あとで自動で送り直します）')})}
 }
 // 「最後にクラウドと一致した内容(shadow)」を端末にも保存。これと違う＝まだ送っていない変更なので、クラウドの古い内容で上書きしない
 const SHADOW_KEY=KEY+'-shadow';
 function saveShadow(){try{localStorage.setItem(SHADOW_KEY,JSON.stringify({uid:FB.user&&FB.user.uid,s:FB.shadow}))}catch(e){}}
+const PEND_KEY=KEY+'-pend';
+function savePend(){try{localStorage.setItem(PEND_KEY,JSON.stringify({uid:FB.user&&FB.user.uid,p:FB.pend}))}catch(e){}}
+function loadPend(uid){try{const d=JSON.parse(localStorage.getItem(PEND_KEY));if(d&&d.uid===uid)return d.p||{}}catch(e){}return{}}
+const pendCount=()=>Object.keys(FB.pend).length;
 function loadShadow(uid){try{const d=JSON.parse(localStorage.getItem(SHADOW_KEY));if(d&&d.uid===uid)return d.s||{}}catch(e){}return{}}
-const isDirty=(k,local)=>FB.shadow[k]!==undefined&&canon(local)!==FB.shadow[k];
+const isDirty=(k,local)=>(FB.shadow[k]!==undefined&&canon(local)!==FB.shadow[k])||(FB.pend[k]!=null&&canon(local)===FB.pend[k]);
 function applyRemote(c,snap){
   if(snap.metadata.fromCache&&snap.empty)return; // 端末の控えが空のときは上書きしない
   if(c==='meta'){const d=snap.docs.find(x=>x.id==='settings'),k='meta/settings';
-    if(d){const v=d.data(),L=localDocs()[k],R={id:'settings',shop:v.shop||'',menus:v.menus||[],hours:v.hours||null,receipt:v.receipt||null};
+    if(d&&FB.pend[k]!=null&&canon(localDocs()[k])===FB.pend[k]){} // まだ届いていない設定の変更→端末を優先
+    else if(d){const v=d.data(),L=localDocs()[k],R={id:'settings',shop:v.shop||'',menus:v.menus||[],hours:v.hours||null,receipt:v.receipt||null};
       let sh=null;try{sh=FB.shadow[k]!==undefined?JSON.parse(FB.shadow[k]):null}catch(e){}
       // 項目ごとに判断：この端末で変えたばかりの項目だけ端末を優先、それ以外はクラウドの内容を入れる
       const mine=f=>sh&&(f in sh)&&canon(L[f])!==canon(sh[f]);
@@ -749,6 +758,7 @@ function applyRemote(c,snap){
     snap.docs.forEach(d=>{const k=c+'/'+d.id,o=byId.get(d.id),v=d.data();seen.add(d.id);
       if(o&&isDirty(k,o)){next.push(o);return}                       // 端末で変えたばかり→端末を優先
       if(!o&&FB.shadow[k]!==undefined&&canon({...v,id:d.id})===FB.shadow[k])return; // 端末で消したばかり→戻さない
+      if(!o&&FB.pend[k]===null)return;                                 // 消したことがまだ届いていない→戻さない
       let x=o;if(x){Object.keys(x).forEach(kk=>{if(!(kk in v))delete x[kk]});Object.assign(x,v)}else x=v;
       x.id=d.id;next.push(x);FB.shadow[k]=canon(x)});
     S[c].forEach(x=>{if(seen.has(x.id))return;const k=c+'/'+x.id;
@@ -760,11 +770,14 @@ function applyRemote(c,snap){
   FB.first[c]=true;
   if(!FB.ready&&[...COLS,'meta'].every(k=>FB.first[k])){FB.ready=true;const was=S.syncUid;S.syncUid=FB.user.uid;delete S.offEdits;if(FB.merge)toast(was?'同期を再開しました':'この端末のデータをクラウドに移しました');setTimeout(dailyProtect,3000);setTimeout(kickSync,8000)}
   saveLocal();saveShadow();schedulePush();header();
-  const a=document.activeElement;if(!(a&&a.matches('main input,main textarea')))render[$('nav button.on').dataset.t]();
+  const a=document.activeElement;if(!(a&&a.matches('main input,main textarea')))render[$('nav button.on').dataset.t]();else FB.needRender=true;
 }
+document.addEventListener('focusout',()=>{if(!FB.needRender)return;setTimeout(()=>{const a=document.activeElement;if(a&&a.matches('main input,main textarea'))return;FB.needRender=false;render[$('nav button.on').dataset.t]()},80)});
 async function startSync(user){
   const {collection,onSnapshot}=FB.fs;
-  FB.user=user;FB.ready=false;FB.first={};FB.merge=S.syncUid!==user.uid;FB.shadow=FB.merge?{}:loadShadow(user.uid);header();
+  FB.user=user;FB.ready=false;FB.first={};FB.merge=S.syncUid!==user.uid;FB.shadow=FB.merge?{}:loadShadow(user.uid);
+  FB.pend=FB.merge?{}:loadPend(user.uid);Object.keys(FB.pend).forEach(k=>{if(FB.pend[k]!==null)delete FB.shadow[k]}); // 届いていない変更は、もう一度送る
+  header();
   FB.unsub=[...COLS,'meta'].map(c=>onSnapshot(collection(FB.db,'users',user.uid,c),{includeMetadataChanges:true},s=>applyRemote(c,s),e=>console.error(e)));
 }
 function stopSync(){(FB.unsub||[]).forEach(f=>f());FB.unsub=[];FB.user=null;FB.ready=false;header()}
@@ -817,8 +830,12 @@ async function autoUpdate(){const v=await checkUpdate();if(!v||v===APP_VER)retur
 autoUpdate();setTimeout(dailyProtect,6000);
 // 受信が止まったままになるのを防ぐ：画面に戻ったとき・2分ごとに、クラウドとの接続をつなぎ直す（送っていない入力は消えない）
 async function kickSync(){if(!FB.ready||FB.kicking)return;FB.kicking=true;try{await FB.fs.disableNetwork(FB.db);await FB.fs.enableNetwork(FB.db)}catch(e){console.error(e)}FB.kicking=false}
-setInterval(()=>{if(document.visibilityState==='visible')kickSync()},120000);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){autoUpdate();dailyProtect();kickSync()}else localSnap(today())});
+setInterval(()=>{if(document.visibilityState==='visible')kickSync()},60000);
+const flush=()=>{if(FB.ready){clearTimeout(FB.t);push()}};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){autoUpdate();dailyProtect();kickSync();flush()}else{flush();localSnap(today())}});
+addEventListener('pagehide',flush);
+addEventListener('online',()=>{header();kickSync();flush()});addEventListener('offline',header);
+addEventListener('focus',()=>kickSync());
 </script>
 </body>
 </html>
