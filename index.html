@@ -246,6 +246,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
   <div class="chips" id="rDur" style="margin-top:8px"><button type="button" class="chip" data-m="30">30分</button><button type="button" class="chip" data-m="60">1時間</button><button type="button" class="chip" data-m="90">1時間半</button><button type="button" class="chip" data-m="120">2時間</button><button type="button" class="chip" data-m="180">3時間</button></div>
   <label>お名前</label><input id="rName" list="names" placeholder="例：山田 花子">
   <label>メニュー</label><div class="chips" id="rMenus"></div>
+  <div id="rProdsBox"><label>商品</label><div class="chips" id="rProds"></div></div>
   <div id="rItems" style="margin-top:10px"></div>
   <label>メモ</label><input id="rNote" placeholder="例：電話予約、指名あり">
   <div class="dlgbtns"><button class="btn danger" id="rDel">取り消す</button><button class="btn" id="rCancel">閉じる</button><button class="btn main" id="rSave">保存</button></div>
@@ -299,8 +300,11 @@ const jp=s=>{const d=new Date(s+'T00:00');return `${d.getMonth()+1}月${d.getDat
 const sumOf=a=>a.reduce((x,s)=>x+s.total,0);
 // 予約の金額：その予約で変えた金額があればそれ、なければ設定のメニュー料金
 const menuPrice=n=>{const m=S.menus.find(x=>x.name===n);return m?+m.price||0:0};
-const resPrice=(r,n)=>{const it=(r.items||[]).find(x=>x.name===n);return it?+it.price||0:menuPrice(n)};
-const resEst=r=>(r.menus||[]).reduce((a,n)=>a+resPrice(r,n),0);
+// 予約の商品は r.prods（名前の並び）。金額は r.items の kind:'p' の行（なければ設定の商品の料金）
+const prodPrice=n=>{const m=(S.products||[]).find(x=>x.name===n);return m?+m.price||0:0};
+const resPrice=(r,n,k='s')=>{const it=(r.items||[]).find(x=>x.name===n&&(x.kind||'s')===k);return it?+it.price||0:k==='p'?prodPrice(n):menuPrice(n)};
+const resEst=r=>(r.menus||[]).reduce((a,n)=>a+resPrice(r,n),0)+(r.prods||[]).reduce((a,n)=>a+resPrice(r,n,'p'),0);
+const resNames=r=>[...(r.menus||[]),...(r.prods||[])];
 // 商品（物販）：会計の行に kind:'p' を付けて区別。印のない古い会計は、商品の名前と同じなら商品として数える
 const prods=()=>S.products||[];
 const isProd=it=>it.kind==='p'||(it.kind==null&&prods().some(p=>p.name===it.name)&&!S.menus.some(m=>m.name===it.name));
@@ -330,7 +334,7 @@ function show(t){$$('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t
 $$('nav button').forEach(b=>b.onclick=()=>show(b.dataset.t));
 
 /* ---- 予約 ---- */
-let resDate=today(),editRes=null,resMenus=[];
+let resDate=today(),editRes=null,resMenus=[],resProds=[];
 const toMin=t=>{if(!t)return null;const [h,m]=t.split(':').map(Number);return h*60+(m||0)};
 const toHM=m=>pad(Math.floor(m/60)%24)+':'+pad(m%60);
 const hours=()=>S.hours||{from:9,to:20};
@@ -356,7 +360,7 @@ function renderYoyaku(){
     const short=ht<60,payB=done?`<span class="tag pay" data-sale="${r.saleId||''}" style="cursor:pointer">済${n>1&&innerWidth<=520?'':' '+(sale?yen(sale.total):'')}</span>`:`<button class="btn main sm pay" data-pay="${r.id}">会計</button>`;
     return `<div class="blk ${done?'done':''} ${short?'short':''}" data-id="${r.id}" style="top:${(s-from)*px+1}px;height:${ht}px;left:calc(${col/n*100}% + 2px);width:calc(${100/n}% - 4px)">`+
       (short?`<div class="r1"><div class="nm"><span class="t">${toHM(s)}</span>${esc(r.name)} 様</div>${payB}</div>`
-      :`<div class="r1"><div class="nm">${esc(r.name)} 様</div>${payB}</div><div class="t">${toHM(s)}〜${toHM(e)}${!done&&resEst(r)?'・'+yen(resEst(r)):''}${ht<90&&(r.menus||[]).length?'・'+esc(r.menus.join('・')):''}</div>${ht>=90?`<div class="t">${esc((r.menus||[]).join('・'))}${r.note?'　'+esc(r.note):''}</div>`:''}`)+`</div>`}).join('');
+      :`<div class="r1"><div class="nm">${esc(r.name)} 様</div>${payB}</div><div class="t">${toHM(s)}〜${toHM(e)}${!done&&resEst(r)?'・'+yen(resEst(r)):''}${ht<90&&resNames(r).length?'・'+esc(resNames(r).join('・')):''}</div>${ht>=90?`<div class="t">${esc(resNames(r).join('・'))}${r.note?'　'+esc(r.note):''}</div>`:''}`)+`</div>`}).join('');
   const now=new Date(),nm=now.getHours()*60+now.getMinutes();
   if(resDate===today()&&nm>=from&&nm<=to)h+=`<div class="now" style="top:${(nm-from)*px}px"></div>`;
   $('#yList').innerHTML=h+'</div>';
@@ -377,13 +381,14 @@ $('#yNext').onclick=()=>{resDate=addDay(resDate,1);renderYoyaku()};
 $('#yToday').onclick=()=>{resDate=today();renderYoyaku()};
 $('#yAdd').onclick=()=>openRes(null);
 
-function chips(sel,arr,after){const el=$(sel);
-  el.innerHTML=S.menus.map(m=>`<button type="button" class="chip ${arr.includes(m.name)?'on':''}" data-n="${esc(m.name)}">${esc(m.name)}</button>`).join('');
+function chips(sel,arr,after,list=S.menus){const el=$(sel);
+  el.innerHTML=list.map(m=>`<button type="button" class="chip ${arr.includes(m.name)?'on':''}" data-n="${esc(m.name)}">${esc(m.name)}</button>`).join('');
   el.onclick=e=>{const b=e.target.closest('.chip');if(!b)return;const i=arr.indexOf(b.dataset.n);i<0?arr.push(b.dataset.n):arr.splice(i,1);b.classList.toggle('on');if(after)after()}}
 let resPx={};
-const rItems=()=>resMenus.map(n=>({name:n,base:menuPrice(n),price:n in resPx?resPx[n]:menuPrice(n)}));
+// resPx のキーは「s:名前」「p:名前」（メニューと商品が同じ名前でも混ざらない）
+const rItems=()=>[...resMenus.map(n=>({name:n,kind:'s',base:menuPrice(n)})),...resProds.map(n=>({name:n,kind:'p',base:prodPrice(n)}))].map(x=>{const k=x.kind+':'+x.name;return{...x,key:k,price:k in resPx?resPx[k]:x.base}});
 function renderRItems(){const it=rItems();
-  $('#rItems').innerHTML=it.length?it.map(x=>`<div class="line ${x.base!==x.price?'chg':''}"><span>${esc(x.name)}${x.base!==x.price?`<span class="sub">（通常 ${yen(x.base)}）</span>`:''}</span><span class="lp">¥<input class="pin" type="number" inputmode="numeric" value="${x.price}" data-n="${esc(x.name)}" aria-label="金額"></span></div>`).join('')
+  $('#rItems').innerHTML=it.length?it.map(x=>`<div class="line ${x.base!==x.price?'chg':''}"><span>${x.kind==='p'?'<span class="sub">商品　</span>':''}${esc(x.name)}${x.base!==x.price?`<span class="sub">（通常 ${yen(x.base)}）</span>`:''}</span><span class="lp">¥<input class="pin" type="number" inputmode="numeric" value="${x.price}" data-n="${esc(x.key)}" aria-label="金額"></span></div>`).join('')
     +`<div class="line" style="font-weight:600"><span>合計（見込み）</span><span id="rTotal">${yen(it.reduce((a,b)=>a+b.price,0))}</span></div>`:''}
 $('#rItems').oninput=e=>{const n=e.target.dataset.n;if(n==null)return;resPx[n]=Math.max(0,+e.target.value||0);$('#rTotal').textContent=yen(rItems().reduce((a,b)=>a+b.price,0))};
 $('#rItems').onchange=e=>{if(e.target.dataset.n!=null)renderRItems()};
@@ -392,7 +397,10 @@ function openRes(id,presetName,presetTime){
   const r=editRes||{date:resDate,time:presetTime||'10:00',name:presetName||'',menus:[],note:''};
   $('#rTitle').textContent=editRes?'予約の変更':'予約を入れる';
   $('#rDate').value=r.date;$('#rTime').value=r.time;$('#rEnd').value=toHM(endOf(r));$('#rName').value=r.name;$('#rNote').value=r.note||'';
-  resMenus=[...(r.menus||[])];resPx={};(r.items||[]).forEach(x=>resPx[x.name]=+x.price||0);chips('#rMenus',resMenus,renderRItems);
+  resMenus=[...(r.menus||[])];resProds=[...(r.prods||[])];resPx={};(r.items||[]).forEach(x=>resPx[(x.kind||'s')+':'+x.name]=+x.price||0);chips('#rMenus',resMenus,renderRItems);
+  // 商品：設定の商品＋（設定から外した商品でも）この予約に入っている物
+  const pl=[...prods(),...resProds.filter(n=>!prods().some(p=>p.name===n)).map(n=>({name:n}))];
+  $('#rProdsBox').style.display=pl.length?'':'none';chips('#rProds',resProds,renderRItems,pl);
   $('#rDel').style.display=editRes&&editRes.status!=='done'?'':'none';
   renderRItems();fillNames();$('#dlgRes').showModal();$('#rTitle').focus();
 }
@@ -409,7 +417,7 @@ $('#rSave').onclick=()=>{
   if(!st||!en){alert('開始と終了の時間を入れてください');return}
   if(toMin(en)<=toMin(st)){alert('終了は開始より後の時間にしてください');return}
   const c=ensureCust(name);
-  const d={date:$('#rDate').value||resDate,time:st,end:en,name,customerId:c.id,menus:[...resMenus],items:rItems().map(({name,price})=>({name,price})),note:$('#rNote').value.trim()};
+  const d={date:$('#rDate').value||resDate,time:st,end:en,name,customerId:c.id,menus:[...resMenus],prods:[...resProds],items:rItems().map(({name,price,kind})=>kind==='p'?{name,price,kind}:{name,price}),note:$('#rNote').value.trim()};
   if(editRes)Object.assign(editRes,d);else S.reservations.push({id:uid(),status:'yoyaku',...d});
   save();resDate=d.date;$('#dlgRes').close();show('yoyaku');toast(editRes?'予約を変更しました':'予約を入れました');
 };
@@ -443,7 +451,7 @@ let co={resId:null,items:[],pay:'現金',editId:null};
 function resetCheckout(){co={resId:null,items:[],pay:'現金',editId:null};['#kName','#kDisc','#kMemo','#kRecv','#kOName','#kOPrice'].forEach(s=>$(s).value='');$('#kDate').value=today()}
 function startCheckout(r,name){
   resetCheckout();
-  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>co.items.push({name:n,price:resPrice(r,n),base:menuPrice(n),kind:'s'}));$('#kName').value=r.name;$('#kDate').value=r.date}
+  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>co.items.push({name:n,price:resPrice(r,n),base:menuPrice(n),kind:'s'}));(r.prods||[]).forEach(n=>co.items.push({name:n,price:resPrice(r,n,'p'),base:prodPrice(n),kind:'p'}));$('#kName').value=r.name;$('#kDate').value=r.date}
   else if(name)$('#kName').value=name;
   show('kaikei');
 }
@@ -602,7 +610,7 @@ let uDate=today();
 const addMon=(ym,k)=>{let [y,m]=ym.split('-').map(Number);m+=k;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return `${y}-${String(m).padStart(2,'0')}`};
 const pendingRes=pre=>S.reservations.filter(r=>r.status!=='done'&&r.date&&r.date.startsWith(pre)&&r.date>=today());
 function forecast(ym){const mon=S.sales.filter(s=>s.date.startsWith(ym)),rs=pendingRes(ym),est=rs.reduce((a,r)=>a+resEst(r),0);
-  return{sold:sumOf(mon),ns:mon.length,est,nr:rs.length,nm:rs.filter(r=>!(r.menus||[]).length).length,total:sumOf(mon)+est}}
+  return{sold:sumOf(mon),ns:mon.length,est,nr:rs.length,nm:rs.filter(r=>!resNames(r).length).length,total:sumOf(mon)+est}}
 function renderForecast(ym){const f=forecast(ym),M=+ym.slice(5);
   $('#uFcLbl').textContent=`${M}月の売上の見込み`;
   const row=(k,v,sub,big)=>`<div style="display:flex;align-items:baseline;gap:10px;padding:8px 4px;${big?'border-top:2px solid var(--line);margin-top:4px':'border-bottom:1px solid var(--line)'}"><div style="flex:1;${big?'font-weight:600':''}">${k}${sub?`<span class="sub" style="margin-left:8px">${sub}</span>`:''}</div><div style="font-size:${big?'26px':'18px'};font-weight:600">${v}</div></div>`;
@@ -654,7 +662,7 @@ $('#sProds').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sProds').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.products[b.dataset.rm];if(!confirm(`「${m.name}」を商品から外しますか？\n（これまでの売上はそのまま残ります）`))return;S.products.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddProd').onclick=()=>{S.products=[...prods(),{name:'新しい商品',price:0}];save();renderSettei();const ins=$$('#sProds input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='2.4'; // ←直したら version.json と一緒に上げる
+const APP_VER='2.5'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
