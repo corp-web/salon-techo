@@ -165,7 +165,11 @@ dialog h3{margin:0 0 4px;font-size:20px}
   <div class="card">
     <h2>メニュー（押すと追加）</h2>
     <div class="mgrid" id="kMenus"></div>
-    <div class="row" style="margin-top:12px"><input id="kOName" placeholder="その他（商品など）" style="flex:2"><input id="kOPrice" type="number" inputmode="numeric" placeholder="金額" style="flex:1"><button class="btn" id="kOAdd">追加</button></div>
+  </div>
+  <div class="card">
+    <h2>商品（押すと追加）</h2>
+    <div class="mgrid" id="kProds"></div>
+    <div class="row" style="margin-top:12px"><input id="kOName" placeholder="その他の商品（ボタンにない物）" style="flex:2"><input id="kOPrice" type="number" inputmode="numeric" placeholder="金額" style="flex:1"><button class="btn" id="kOAdd">追加</button></div>
   </div>
   <div class="card">
     <div id="kItems"></div>
@@ -220,6 +224,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
   <div class="card"><h2>営業時間（予約画面の時間の幅）</h2>
     <div class="row"><select id="sFrom" class="sel"></select><span>〜</span><select id="sTo" class="sel"></select></div></div>
   <div class="card"><h2>メニューと料金（税込）</h2><div id="sMenus"></div><button class="btn" id="sAddMenu">＋ メニューを追加</button></div>
+  <div class="card"><h2>商品と料金（税込）</h2><div id="sProds"></div><button class="btn" id="sAddProd">＋ 商品を追加</button></div>
   <div class="card"><h2>データの保護（自動の控え）</h2>
     <p style="margin:0 0 8px">毎日、自動で控えを取っています。<span class="sub">クラウドに約2か月分＋毎月1つずつ、この端末に14日分。</span></p>
     <p class="sub" style="margin:0 0 12px" id="pLast"></p>
@@ -296,9 +301,16 @@ const sumOf=a=>a.reduce((x,s)=>x+s.total,0);
 const menuPrice=n=>{const m=S.menus.find(x=>x.name===n);return m?+m.price||0:0};
 const resPrice=(r,n)=>{const it=(r.items||[]).find(x=>x.name===n);return it?+it.price||0:menuPrice(n)};
 const resEst=r=>(r.menus||[]).reduce((a,n)=>a+resPrice(r,n),0);
+// 商品（物販）：会計の行に kind:'p' を付けて区別。印のない古い会計は、商品の名前と同じなら商品として数える
+const prods=()=>S.products||[];
+const isProd=it=>it.kind==='p'||(it.kind==null&&prods().some(p=>p.name===it.name)&&!S.menus.some(m=>m.name===it.name));
+// 1件の会計を施術と商品に分ける（値引きは施術から引く。足すと必ず合計に一致）
+const splitSale=s=>{const p=Math.min(s.total,s.items.filter(isProd).reduce((a,i)=>a+(+i.price||0),0));return{p,t:s.total-p}};
+const splitOf=a=>a.reduce((x,s)=>{const v=splitSale(s);x.t+=v.t;x.p+=v.p;return x},{t:0,p:0});
+const splitTxt=a=>{const v=splitOf(a);return v.t+v.p?`<br>施術 ${yen(v.t)}<br>商品 ${yen(v.p)}`:''};
 
 function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.menus)return d}catch(e){try{const raw=localStorage.getItem(KEY);if(raw)localStorage.setItem(KEY+'-broken-'+Date.now(),raw)}catch(e2){}}
-  return{shop:'',menus:DEFAULT_MENUS.map(m=>({...m})),customers:[],reservations:[],sales:[],lastBackup:''}}
+  return{shop:'',menus:DEFAULT_MENUS.map(m=>({...m})),products:[],customers:[],reservations:[],sales:[],lastBackup:''}}
 function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('この端末に保存できませんでした（空き容量をご確認ください）。クラウドには送られています。')}}
 function save(){if(S.syncUid&&!FB.ready)S.offEdits=true;saveLocal();schedulePush()} // 同期が切れている間の入力は、再ログイン時に消さずに合流させる
 let S=load();
@@ -431,7 +443,7 @@ let co={resId:null,items:[],pay:'現金',editId:null};
 function resetCheckout(){co={resId:null,items:[],pay:'現金',editId:null};['#kName','#kDisc','#kMemo','#kRecv','#kOName','#kOPrice'].forEach(s=>$(s).value='');$('#kDate').value=today()}
 function startCheckout(r,name){
   resetCheckout();
-  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>co.items.push({name:n,price:resPrice(r,n),base:menuPrice(n)}));$('#kName').value=r.name;$('#kDate').value=r.date}
+  if(r){co.resId=r.id;(r.menus||[]).forEach(n=>co.items.push({name:n,price:resPrice(r,n),base:menuPrice(n),kind:'s'}));$('#kName').value=r.name;$('#kDate').value=r.date}
   else if(name)$('#kName').value=name;
   show('kaikei');
 }
@@ -447,7 +459,8 @@ function calc(){const t=total();$('#kTotal').textContent=yen(t);const r=+$('#kRe
 function renderKaikei(){
   fillNames();if(!$('#kDate').value)$('#kDate').value=today();
   $('#kMenus').innerHTML=S.menus.map((m,i)=>`<button type="button" class="mbtn" data-i="${i}"><b>${esc(m.name)}</b><span>${yen(m.price)}</span></button>`).join('');
-  $('#kItems').innerHTML=co.items.length?co.items.map((it,i)=>`<div class="line ${it.base!=null&&it.base!==it.price?'chg':''}"><span>${esc(it.name)}${it.base!=null&&it.base!==it.price?`<span class="sub">（通常 ${yen(it.base)}）</span>`:''}</span><span class="lp">¥<input class="pin" type="number" inputmode="numeric" value="${it.price}" data-p="${i}" aria-label="金額"><button class="x" data-x="${i}" aria-label="削除">✕</button></span></div>`).join(''):'<p class="empty">メニューを押してください</p>';
+  $('#kProds').innerHTML=prods().length?prods().map((m,i)=>`<button type="button" class="mbtn" data-i="${i}"><b>${esc(m.name)}</b><span>${yen(m.price)}</span></button>`).join(''):'<p class="sub" style="margin:0;grid-column:1/-1">よく売る商品は、設定の「商品と料金」に入れると、ここに出ます</p>';
+  $('#kItems').innerHTML=co.items.length?co.items.map((it,i)=>`<div class="line ${it.base!=null&&it.base!==it.price?'chg':''}"><span>${isProd(it)?'<span class="sub">商品　</span>':''}${esc(it.name)}${it.base!=null&&it.base!==it.price?`<span class="sub">（通常 ${yen(it.base)}）</span>`:''}</span><span class="lp">¥<input class="pin" type="number" inputmode="numeric" value="${it.price}" data-p="${i}" aria-label="金額"><button class="x" data-x="${i}" aria-label="削除">✕</button></span></div>`).join(''):'<p class="empty">メニューを押してください</p>';
   $$('#kPay button').forEach(b=>b.classList.toggle('on',b.dataset.p===co.pay));
   const ed=co.editId&&S.sales.find(x=>x.id===co.editId);
   if(co.editId&&!ed)resetCheckout(); // 他の端末で取り消された
@@ -462,13 +475,14 @@ function custHint(){
   const last=S.sales.filter(s=>s.customerId===c.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time))[0];
   el.innerHTML=(c.memo?`<div>メモ：${esc(c.memo)}</div>`:'')+(last?`<div class="sub">前回 ${jp(last.date)}：${esc(last.items.map(i=>i.name).join('・'))}${last.memo?'／'+esc(last.memo):''}</div>`:'<div class="sub">来店履歴はまだありません</div>');
 }
-$('#kMenus').onclick=e=>{const b=e.target.closest('.mbtn');if(!b)return;const m=S.menus[b.dataset.i];co.items.push({name:m.name,price:m.price,base:m.price});renderKaikei()};
+$('#kMenus').onclick=e=>{const b=e.target.closest('.mbtn');if(!b)return;const m=S.menus[b.dataset.i];co.items.push({name:m.name,price:m.price,base:m.price,kind:'s'});renderKaikei()};
+$('#kProds').onclick=e=>{const b=e.target.closest('.mbtn');if(!b)return;const m=prods()[b.dataset.i];co.items.push({name:m.name,price:+m.price||0,base:+m.price||0,kind:'p'});renderKaikei()};
 $('#kItems').oninput=e=>{const i=e.target.dataset.p;if(i==null)return;co.items[i].price=Math.max(0,+e.target.value||0);calc()};
 $('#kItems').addEventListener('change',e=>{if(e.target.dataset.p!=null)renderKaikei()}); // 入力を終えたら「通常◯円」を表示
 $('#kItems').addEventListener('focusin',e=>{if(e.target.dataset.p!=null)e.target.select()});
 $('#kItems').onclick=e=>{const x=e.target.closest('[data-x]');if(!x)return;co.items.splice(+x.dataset.x,1);renderKaikei()};
 $('#kOAdd').onclick=()=>{const n=$('#kOName').value.trim()||'その他',p=+$('#kOPrice').value||0;if(!p){alert('金額を入れてください');return}
-  co.items.push({name:n,price:p});$('#kOName').value='';$('#kOPrice').value='';renderKaikei()};
+  co.items.push({name:n,price:p,kind:'p'});$('#kOName').value='';$('#kOPrice').value='';renderKaikei()};
 $('#kPay').onclick=e=>{const b=e.target.closest('button');if(!b)return;co.pay=b.dataset.p;renderKaikei()};
 $('#kDisc').oninput=calc;$('#kRecv').oninput=calc;$('#kName').oninput=custHint;
 $('#kClear').onclick=()=>{
@@ -481,7 +495,7 @@ $('#kDone').onclick=()=>{
   if(!co.items.length){alert('メニューを選んでください');return}
   const t=total();if(co.pay==='現金'){const r=+$('#kRecv').value||0;if(r&&r<t){alert('お預かりが足りません');return}}
   const name=$('#kName').value.trim(),c=ensureCust(name);
-  const items=co.items.map(({name,price})=>({name,price})); // 「通常価格」は保存しない
+  const items=co.items.map(({name,price,kind})=>kind?{name,price,kind}:{name,price}); // 「通常価格」は保存しない。施術(s)・商品(p)の印は残す
   if(co.editId){const s=S.sales.find(x=>x.id===co.editId);if(!s){alert('この会計は取り消されています');resetCheckout();renderKaikei();return}
     Object.assign(s,{date:$('#kDate').value||s.date,customerId:c?c.id:null,name:name||'お客様',items,discount:+$('#kDisc').value||0,total:t,pay:co.pay,memo:$('#kMemo').value.trim()});
     save();toast(`会計を変更しました　${yen(t)}`);uDate=s.date;resetCheckout();renderKaikei();show('uriage');return}
@@ -602,18 +616,18 @@ function renderUriage(){
   const ym=uDate.slice(0,7),mon=S.sales.filter(s=>s.date.startsWith(ym));
   $('#uDay').textContent=yen(sumOf(day));
   const by=['現金','カード','QR'].map(p=>[p,sumOf(day.filter(s=>s.pay===p))]).filter(x=>x[1]);
-  $('#uDaySub').textContent=`${day.length}名`+(by.length?'　'+by.map(([p,v])=>`${p} ${yen(v)}`).join('・'):'');
-  $('#uMonLbl').textContent=`${+ym.slice(5)}月の売上`;$('#uMon').textContent=yen(sumOf(mon));$('#uMonSub').textContent=`${mon.length}名`;
+  $('#uDaySub').innerHTML=esc(`${day.length}名`+(by.length?'　'+by.map(([p,v])=>`${p} ${yen(v)}`).join('・'):''))+splitTxt(day);
+  $('#uMonLbl').textContent=`${+ym.slice(5)}月の売上`;$('#uMon').textContent=yen(sumOf(mon));$('#uMonSub').innerHTML=esc(`${mon.length}名`)+splitTxt(mon);
   renderForecast(ym);
   $('#uList').innerHTML=day.length?day.map(s=>`<div class="item" data-sale="${s.id}"><div class="time" style="font-size:15px">${s.time}</div><div class="body"><div class="name" style="font-size:16px">${esc(s.name)} 様</div>
-    <div class="sub">${esc(s.items.map(i=>i.name).join('・'))}${s.discount?`（値引 ${yen(s.discount)}）`:''}・${s.pay}</div></div><b>${yen(s.total)}</b><span class="sub" style="margin-left:4px">›</span></div>`).join('')+'<p class="sub" style="margin:10px 4px 0">会計を押すと、変更・取り消しができます</p>'
+    <div class="sub">${esc(s.items.map(i=>(isProd(i)?'［商品］':'')+i.name).join('・'))}${s.discount?`（値引 ${yen(s.discount)}）`:''}・${s.pay}</div></div><b>${yen(s.total)}</b><span class="sub" style="margin-left:4px">›</span></div>`).join('')+'<p class="sub" style="margin:10px 4px 0">会計を押すと、変更・取り消しができます</p>'
     :'<p class="empty">この日の会計はありません</p>';
   const days={};mon.forEach(s=>{(days[s.date]=days[s.date]||[]).push(s)});
   $('#uDailyLbl').textContent=`${+ym.slice(5)}月の日別`;
   const fut={};pendingRes(ym).forEach(r=>{(fut[r.date]=fut[r.date]||[]).push(r)});
   const keys=[...new Set([...Object.keys(days),...Object.keys(fut)])].sort();
   $('#uDaily').innerHTML=keys.length?keys.map(k=>{const sd=days[k]||[],fr=fut[k]||[],e=fr.reduce((a,r)=>a+resEst(r),0);
-    return `<tr><td>${jp(k)}</td><td>${sd.length?sd.length+'名':''}${fr.length?`${sd.length?'＋':''}<span class="sub">予約${fr.length}件</span>`:''}</td><td>${sd.length?yen(sumOf(sd)):''}${fr.length?`${sd.length?'＋':''}<span class="sub">見込み${yen(e)}</span>`:''}</td></tr>`}).join(''):'<tr><td class="sub">記録なし</td></tr>';
+    return `<tr><td>${jp(k)}</td><td>${sd.length?sd.length+'名':''}${fr.length?`${sd.length?'＋':''}<span class="sub">予約${fr.length}件</span>`:''}</td><td>${sd.length?yen(sumOf(sd))+(splitOf(sd).p?`<span class="sub">（商品 ${yen(splitOf(sd).p)}）</span>`:''):''}${fr.length?`${sd.length?'＋':''}<span class="sub">見込み${yen(e)}</span>`:''}</td></tr>`}).join(''):'<tr><td class="sub">記録なし</td></tr>';
 }
 $('#uList').onclick=e=>{const x=e.target.closest('[data-sale]');if(x)startEditSale(x.dataset.sale)};
 $('#uPrev').onclick=()=>{uDate=addDay(uDate,-1);renderUriage()};
@@ -627,6 +641,7 @@ function renderSettei(){
   const opt=(a,b,v)=>{let o='';for(let h=a;h<=b;h++)o+=`<option value="${h}" ${h===v?'selected':''}>${h}:00</option>`;return o};
   $('#sFrom').innerHTML=opt(5,14,hours().from);$('#sTo').innerHTML=opt(15,24,hours().to);
   $('#sMenus').innerHTML=S.menus.map((m,i)=>`<div class="mrow"><input value="${esc(m.name)}" data-i="${i}" data-f="name"><input type="number" inputmode="numeric" value="${m.price}" data-i="${i}" data-f="price"><button class="btn sm danger" data-rm="${i}">✕</button></div>`).join('');
+  $('#sProds').innerHTML=prods().length?prods().map((m,i)=>`<div class="mrow"><input value="${esc(m.name)}" data-i="${i}" data-f="name"><input type="number" inputmode="numeric" value="${m.price}" data-i="${i}" data-f="price"><button class="btn sm danger" data-rm="${i}">✕</button></div>`).join(''):'<p class="sub" style="margin:0 0 10px">まだありません。シャンプーなど、よく売る商品を入れると会計でボタンになります</p>';
   renderSync();renderVer();renderProtect();
 }
 $('#sShop').oninput=()=>{S.shop=$('#sShop').value.trim();save();header()};
@@ -635,8 +650,11 @@ $('#sFrom').onchange=$('#sTo').onchange=()=>{S.hours={from:+$('#sFrom').value,to
 $('#sMenus').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.menus[t.dataset.i];if(t.dataset.f==='price')m.price=+t.value||0;else m.name=t.value;save()};
 $('#sMenus').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.menus[b.dataset.rm];if(!confirm(`「${m.name}」をメニューから外しますか？`))return;S.menus.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddMenu').onclick=()=>{S.menus.push({name:'新しいメニュー',price:0});save();renderSettei();const ins=$$('#sMenus input[data-f="name"]');ins[ins.length-1].select()};
+$('#sProds').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.products[t.dataset.i];if(t.dataset.f==='price')m.price=+t.value||0;else m.name=t.value;save()};
+$('#sProds').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.products[b.dataset.rm];if(!confirm(`「${m.name}」を商品から外しますか？\n（これまでの売上はそのまま残ります）`))return;S.products.splice(+b.dataset.rm,1);save();renderSettei()};
+$('#sAddProd').onclick=()=>{S.products=[...prods(),{name:'新しい商品',price:0}];save();renderSettei();const ins=$$('#sProds input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='2.3'; // ←直したら version.json と一緒に上げる
+const APP_VER='2.4'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
@@ -654,7 +672,7 @@ $('#sUpdate').onclick=async()=>{
 
 /* ---- データの保護：毎日の自動の控え（クラウド＋この端末）と、以前の状態に戻す ---- */
 // クラウドの控えは、セキュリティルールで「作成のみ・書き換え不可・60日たつまで削除不可」。アプリに不具合があっても消せない
-const snapData=()=>JSON.parse(JSON.stringify({shop:S.shop||'',menus:S.menus,hours:S.hours||null,receipt:S.receipt||null,customers:S.customers,reservations:S.reservations,sales:S.sales}));
+const snapData=()=>JSON.parse(JSON.stringify({shop:S.shop||'',menus:S.menus,products:prods(),hours:S.hours||null,receipt:S.receipt||null,customers:S.customers,reservations:S.reservations,sales:S.sales}));
 const cntOf=d=>({c:(d.customers||[]).length,r:(d.reservations||[]).length,s:(d.sales||[]).length});
 const cntTxt=c=>c?`お客様${c.c}人・予約${c.r}件・会計${c.s}件`:'';
 const emptyData=d=>!(d.customers.length||d.reservations.length||d.sales.length);
@@ -682,7 +700,7 @@ async function dailyProtect(){const t=today();localSnap(t);
   protecting=false}
 function renderProtect(){const el=$('#pLast');if(!el)return;let last='';try{last=localStorage.getItem(KEY+'-bk')||''}catch(e){}
   el.textContent=last?`クラウドへの最後の控え：${jp(last.slice(0,10))} ${last.slice(11)}`:(FB.user?'クラウドへの控えは、まもなく自動で取ります':'ログインすると、クラウドにも控えを取ります（今はこの端末だけ）')}
-function applySnap(d){S.shop=d.shop||'';if(d.menus)S.menus=d.menus;if(d.hours)S.hours=d.hours;S.receipt=d.receipt||null;
+function applySnap(d){S.shop=d.shop||'';if(d.menus)S.menus=d.menus;if(d.products)S.products=d.products;if(d.hours)S.hours=d.hours;S.receipt=d.receipt||null;
   S.customers=d.customers||[];S.reservations=d.reservations||[];S.sales=d.sales||[];save();header();render[$('nav button.on').dataset.t]()}
 const SNAP={};
 $('#pRestore').onclick=async()=>{$('#snapList').innerHTML='<p class="sub">読み込み中…</p>';$('#dlgSnap').showModal();
@@ -713,7 +731,7 @@ const SDK='https://www.gstatic.com/firebasejs/10.12.2/';
 const COLS=['customers','reservations','sales'];
 const FB={user:null,ready:false,shadow:{},first:{},merge:false,pend:{}};
 const canon=v=>Array.isArray(v)?'['+v.map(canon).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}':JSON.stringify(v===undefined?null:v);
-function localDocs(){const m={};COLS.forEach(c=>S[c].forEach(x=>m[c+'/'+x.id]=x));m['meta/settings']={id:'settings',shop:S.shop||'',menus:S.menus,hours:hours(),receipt:S.receipt||null};return m}
+function localDocs(){const m={};COLS.forEach(c=>S[c].forEach(x=>m[c+'/'+x.id]=x));m['meta/settings']={id:'settings',shop:S.shop||'',menus:S.menus,products:prods(),hours:hours(),receipt:S.receipt||null};return m}
 function schedulePush(){if(!FB.ready)return;clearTimeout(FB.t);FB.t=setTimeout(push,250)}
 async function push(){
   if(!FB.ready)return;const {doc,writeBatch}=FB.fs,cur=localDocs(),ops=[];
@@ -744,12 +762,13 @@ function applyRemote(c,snap){
   if(snap.metadata.fromCache&&snap.empty)return; // 端末の控えが空のときは上書きしない
   if(c==='meta'){const d=snap.docs.find(x=>x.id==='settings'),k='meta/settings';
     if(d&&FB.pend[k]!=null&&canon(localDocs()[k])===FB.pend[k]){} // まだ届いていない設定の変更→端末を優先
-    else if(d){const v=d.data(),L=localDocs()[k],R={id:'settings',shop:v.shop||'',menus:v.menus||[],hours:v.hours||null,receipt:v.receipt||null};
+    else if(d){const v=d.data(),L=localDocs()[k],R={id:'settings',shop:v.shop||'',menus:v.menus||[],products:v.products||[],hours:v.hours||null,receipt:v.receipt||null};
       let sh=null;try{sh=FB.shadow[k]!==undefined?JSON.parse(FB.shadow[k]):null}catch(e){}
       // 項目ごとに判断：この端末で変えたばかりの項目だけ端末を優先、それ以外はクラウドの内容を入れる
       const mine=f=>sh&&(f in sh)&&canon(L[f])!==canon(sh[f]);
       if(!mine('shop'))S.shop=R.shop;
       if(!mine('menus'))S.menus=R.menus;
+      if(!mine('products')&&(v.products||!prods().length))S.products=R.products; // クラウドにまだ商品がない（旧版）ときは、端末の商品を消さない
       if(!mine('hours')&&R.hours)S.hours=R.hours;
       if(!mine('receipt')&&R.receipt)S.receipt=R.receipt;
       FB.shadow[k]=canon(R)}}
