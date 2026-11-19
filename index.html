@@ -189,6 +189,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
 <!-- お客様 -->
 <section id="okyaku">
   <div class="row" style="margin-bottom:14px"><input id="cSearch" placeholder="名前・電話番号でさがす"><button class="btn main" id="cAdd">＋ 新規</button></div>
+  <p class="sub" id="cCount" style="margin:0 4px 10px"></p>
   <div class="card"><div id="cList"></div></div>
 </section>
 
@@ -202,7 +203,11 @@ dialog h3{margin:0 0 4px;font-size:20px}
     <div class="stat"><div class="k">この日の売上</div><div class="v" id="uDay">¥0</div><div class="sub" id="uDaySub"></div></div>
     <div class="stat"><div class="k" id="uMonLbl">今月の売上</div><div class="v" id="uMon">¥0</div><div class="sub" id="uMonSub"></div></div>
   </div>
-  <div class="card" style="margin-top:14px"><h2 id="uFcLbl">売上の見込み</h2>
+  <div class="card" style="margin-top:14px"><h2>メニュー・商品ごとの売上</h2>
+    <div class="seg" id="uBdSeg"><button data-b="day">この日</button><button data-b="mon">今月</button></div>
+    <div id="uBd" style="margin-top:10px"></div>
+  </div>
+  <div class="card"><h2 id="uFcLbl">売上の見込み</h2>
     <div id="uFc"></div>
     <table id="uFcTbl" style="margin-top:12px"></table>
     <p class="sub" style="margin:10px 4px 0">見込み＝会計済みの売上＋これからの予約（予約のメニューの料金で計算）。メニューを選んでいない予約は ¥0 で数えます。</p>
@@ -254,7 +259,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
 
 <!-- 以前の状態に戻す -->
 <dialog id="dlgSnap">
-  <h3>以前の状態に戻す</h3>
+  <h3 tabindex="-1" autofocus style="outline:none">以前の状態に戻す</h3>
   <p class="sub" style="margin-top:0">戻したい日時を選んでください。戻す前の今の状態も控えに残すので、あとから元に戻すこともできます。</p>
   <div id="snapList"></div>
   <div class="dlgbtns"><button class="btn" id="snapClose">閉じる</button></div>
@@ -262,7 +267,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
 
 <!-- 領収書ダイアログ -->
 <dialog id="dlgRcpt">
-  <h3 id="rcTitle">領収書</h3>
+  <h3 id="rcTitle" tabindex="-1" autofocus style="outline:none">領収書</h3>
   <div class="row"><div style="flex:1"><label>宛名</label><input id="rcTo" placeholder="例：山田 花子 様／上様"></div></div>
   <label>但し書き</label><input id="rcNote">
   <div style="margin-top:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff"><img id="rcImg" alt="領収書の見本" style="display:block;width:100%"></div>
@@ -271,7 +276,7 @@ dialog h3{margin:0 0 4px;font-size:20px}
 
 <!-- お客様ダイアログ -->
 <dialog id="dlgCust">
-  <h3>カルテ</h3>
+  <h3 id="cTitle" tabindex="-1" autofocus style="outline:none">カルテ</h3>
   <label>お名前</label><input id="cName">
   <div class="row"><div style="flex:1"><label>電話</label><input id="cTel" type="tel"></div><div style="flex:1"><label>誕生日</label><input id="cBirth" type="date"></div></div>
   <label>メモ（髪質・好み・アレルギーなど）</label><textarea id="cMemo"></textarea>
@@ -319,6 +324,9 @@ function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){al
 function save(){if(S.syncUid&&!FB.ready)S.offEdits=true;saveLocal();schedulePush()} // 同期が切れている間の入力は、再ログイン時に消さずに合流させる
 let S=load();
 
+// 画面（ダイアログ）を開いたとき、入力欄を勝手に選ばない＝キーボードを出さない。見出しに目印を置き、押した欄から入力する
+const _showModal=HTMLDialogElement.prototype.showModal;
+HTMLDialogElement.prototype.showModal=function(){_showModal.call(this);const h=this.querySelector('h3');if(h){h.tabIndex=-1;h.style.outline='none';h.focus({preventScroll:true})}else if(document.activeElement)document.activeElement.blur()};
 function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove('on'),1800)}
 function custByName(n){return S.customers.find(c=>c.name===n)}
 function ensureCust(n){n=(n||'').trim();if(!n)return null;let c=custByName(n);if(!c){c={id:uid(),name:n,tel:'',birth:'',memo:''};S.customers.push(c)}return c}
@@ -575,6 +583,7 @@ function renderOkyaku(){
   $('#cList').innerHTML=list.length?list.map(({c,n,last})=>`<div class="item" data-id="${c.id}"><div class="body"><div class="name">${esc(c.name)} 様</div>
     <div class="sub">${n?`来店${n}回・前回 ${jp(last)}`:'来店記録なし'}${c.tel?'　'+esc(c.tel):''}</div></div><span class="sub">›</span></div>`).join('')
     :`<p class="empty">${q?'見つかりません':'お客様はまだいません。予約や会計をすると自動で登録されます'}</p>`;
+  $('#cCount').innerHTML=`登録 <b style="color:var(--ink);font-size:17px">${S.customers.length}</b> 人`+(q?`（「${esc(q)}」で ${list.length}人）`:'');
 }
 $('#cSearch').oninput=renderOkyaku;
 $('#cList').onclick=e=>{const it=e.target.closest('.item');if(it)openCust(it.dataset.id)};
@@ -618,6 +627,21 @@ function renderForecast(ym){const f=forecast(ym),M=+ym.slice(5);
   const base=today().slice(0,7);
   $('#uFcTbl').innerHTML='<tr><td class="sub">月</td><td class="sub">会計済み</td><td class="sub">予約</td><td class="sub">見込み</td></tr>'+[0,1,2].map(i=>{const m=addMon(base,i),g=forecast(m);
     return `<tr><td>${+m.slice(5)}月${i===0?'（今月）':''}</td><td>${yen(g.sold)}</td><td>${yen(g.est)} <span class="sub">${g.nr}件</span></td><td><b>${yen(g.total)}</b></td></tr>`}).join('')}
+// メニュー・商品ごと：会計の行を名前ごとに集計（金額は値引き前。値引きは最後に1行で引き、合計は売上と一致）
+let uBd='day';
+function renderBreakdown(list,lbl){
+  $$('#uBdSeg button').forEach(b=>{b.classList.toggle('on',b.dataset.b===uBd);if(b.dataset.b==='mon')b.textContent=`${+uDate.slice(5,7)}月`});
+  const g={s:new Map(),p:new Map()};let disc=0;
+  list.forEach(s=>{disc+=Math.min(+s.discount||0,s.items.reduce((a,i)=>a+(+i.price||0),0));
+    s.items.forEach(i=>{const m=g[isProd(i)?'p':'s'],o=m.get(i.name)||{n:0,v:0};o.n++;o.v+=+i.price||0;m.set(i.name,o)})});
+  const tr=(k,n,v,st='')=>`<tr${st?` style="${st}"`:''}><td>${k}</td><td style="text-align:right">${n}</td><td style="text-align:right">${v}</td></tr>`;
+  const part=(t,m)=>{const a=[...m].sort((x,y)=>y[1].v-x[1].v),sum=a.reduce((x,[,o])=>x+o.v,0);
+    return tr(`<b>${t}</b>`,'',`<b>${yen(sum)}</b>`,'background:var(--soft)')+(a.length?a.map(([k,o])=>tr('　'+esc(k),o.n+'件',yen(o.v))).join(''):tr('<span class="sub">　なし</span>','',''))};
+  if(!list.length){$('#uBd').innerHTML=`<p class="empty">${lbl}の会計はありません</p>`;return}
+  $('#uBd').innerHTML=`<table>${part('施術',g.s)}${part('商品',g.p)}${disc?tr('値引き','','-'+yen(disc)):''}${tr('<b>合計</b>','',`<b>${yen(sumOf(list))}</b>`,'border-top:2px solid var(--line)')}</table>`
+    +(disc?'<p class="sub" style="margin:8px 4px 0">メニュー・商品の金額は値引き前です</p>':'');
+}
+$('#uBdSeg').onclick=e=>{const b=e.target.closest('[data-b]');if(!b)return;uBd=b.dataset.b;renderUriage()};
 function renderUriage(){
   $('#uDate').textContent=jp(uDate)+(uDate===today()?'・今日':'');
   const day=S.sales.filter(s=>s.date===uDate).sort((a,b)=>a.time.localeCompare(b.time));
@@ -626,6 +650,7 @@ function renderUriage(){
   const by=['現金','カード','QR'].map(p=>[p,sumOf(day.filter(s=>s.pay===p))]).filter(x=>x[1]);
   $('#uDaySub').innerHTML=esc(`${day.length}名`+(by.length?'　'+by.map(([p,v])=>`${p} ${yen(v)}`).join('・'):''))+splitTxt(day);
   $('#uMonLbl').textContent=`${+ym.slice(5)}月の売上`;$('#uMon').textContent=yen(sumOf(mon));$('#uMonSub').innerHTML=esc(`${mon.length}名`)+splitTxt(mon);
+  renderBreakdown(uBd==='day'?day:mon,uBd==='day'?'この日':`${+ym.slice(5)}月`);
   renderForecast(ym);
   $('#uList').innerHTML=day.length?day.map(s=>`<div class="item" data-sale="${s.id}"><div class="time" style="font-size:15px">${s.time}</div><div class="body"><div class="name" style="font-size:16px">${esc(s.name)} 様</div>
     <div class="sub">${esc(s.items.map(i=>(isProd(i)?'［商品］':'')+i.name).join('・'))}${s.discount?`（値引 ${yen(s.discount)}）`:''}・${s.pay}</div></div><b>${yen(s.total)}</b><span class="sub" style="margin-left:4px">›</span></div>`).join('')+'<p class="sub" style="margin:10px 4px 0">会計を押すと、変更・取り消しができます</p>'
@@ -662,7 +687,7 @@ $('#sProds').oninput=e=>{const t=e.target;if(t.dataset.i==null)return;const m=S.
 $('#sProds').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;const m=S.products[b.dataset.rm];if(!confirm(`「${m.name}」を商品から外しますか？\n（これまでの売上はそのまま残ります）`))return;S.products.splice(+b.dataset.rm,1);save();renderSettei()};
 $('#sAddProd').onclick=()=>{S.products=[...prods(),{name:'新しい商品',price:0}];save();renderSettei();const ins=$$('#sProds input[data-f="name"]');ins[ins.length-1].select()};
 /* ---- アップデート ---- */
-const APP_VER='2.5'; // ←直したら version.json と一緒に上げる
+const APP_VER='2.6'; // ←直したら version.json と一緒に上げる
 let latestVer=null;
 async function checkUpdate(){try{const r=await fetch('version.json?t='+Date.now(),{cache:'no-store'});latestVer=(await r.json()).v}catch(e){latestVer=null}return latestVer}
 function renderVer(){if(!$('#sVer'))return;$('#sVer').textContent='v'+APP_VER;
